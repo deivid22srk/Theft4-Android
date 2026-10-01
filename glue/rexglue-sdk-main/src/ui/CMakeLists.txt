@@ -75,6 +75,12 @@ elseif(APPLE)
         metal_layer_config_mac.mm
         surface_mac.cpp
     )
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    # No X11/XCB on Android; Vulkan presentation goes through ANativeWindow
+    # (surface_android.h is header-only).
+    set(REXUI_PLATFORM_SOURCES
+        surface_android.cpp
+    )
 else()
     set(REXUI_PLATFORM_SOURCES
         surface_gnulinux.cpp
