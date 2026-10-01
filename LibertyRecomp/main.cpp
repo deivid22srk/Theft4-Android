@@ -515,7 +515,7 @@ int main(int argc, char *argv[])
         if (!rex::diagnostics::Configure(diagnostics, diagnosticsCategories,
                                          &diagnosticsError)) {
             std::fprintf(stderr, "Liberty Recompiled: %s\n", diagnosticsError.c_str());
-            return CLI::ExitCodes::ValidationError;
+            return static_cast<int>(CLI::ExitCodes::ValidationError);
         }
 
         App::s_isSkipLogos = App::s_isSkipLogos || skipLogos;
@@ -767,13 +767,13 @@ int main(int argc, char *argv[])
         rexConfig.live.lan_discovery_port = static_cast<uint16_t>(std::clamp<int32_t>(
             Config::LANBroadcastPort.Value, 1, std::numeric_limits<uint16_t>::max()));
 
-        uint32_t rt_status = s_rexRuntime->Setup(
-            static_cast<uint32_t>(PPC_CODE_BASE),
-            static_cast<uint32_t>(PPC_CODE_SIZE),
-            static_cast<uint32_t>(PPC_IMAGE_BASE),
-            static_cast<uint32_t>(PPC_IMAGE_SIZE),
-            PPCFuncMappings,
-            std::move(rexConfig));
+        rex::PPCImageInfo image_info{};
+        image_info.code_base = static_cast<u32>(PPC_CODE_BASE);
+        image_info.code_size = static_cast<u32>(PPC_CODE_SIZE);
+        image_info.image_base = static_cast<u32>(PPC_IMAGE_BASE);
+        image_info.image_size = static_cast<u32>(PPC_IMAGE_SIZE);
+        image_info.func_mappings = PPCFuncMappings;
+        uint32_t rt_status = s_rexRuntime->Setup(image_info, std::move(rexConfig));
         DIAG_EMIT("[Main] Setup() returned 0x%08X\n", rt_status);
 
         // Xbox 360 timebase = exactly 50 MHz. Must be explicit because Liberty
@@ -1197,7 +1197,7 @@ int main(int argc, char *argv[])
         auto* p = rt->function_dispatcher();
         PPCFunc* xsf = p->GetFunction(0x82A11290);
         fprintf(stderr, "[DIAG] Before LaunchModule(): GetFunction(0x82A11290)=%p  HasFT=%d  instance=%p\n",
-                (void*)xsf, (int)p->HasFunctionTable(), (void*)rt);
+                (void*)xsf, (int)p->HasAnyFunctionTable(), (void*)rt);
         fflush(stderr);
     }
     auto main_xthread = rt->LaunchModule();

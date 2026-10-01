@@ -1,5 +1,10 @@
 #pragma once
 
+// This header uses the XenosRecomp-era PPC_* macros; pull in the adapter
+// header so every includer gets them (cpu/ppc_context.h maps them onto the
+// REX_* macros emitted by the generated gta4_init.h).
+#include <cpu/ppc_context.h>
+
 #ifndef _WIN32
 #define MEM_COMMIT  0x00001000  
 #define MEM_RESERVE 0x00002000  
