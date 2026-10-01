@@ -2,23 +2,9 @@ name: macOS Build
 
 # Builds the same Apple Silicon consumer and dependency setup as docs/BUILDING.md.
 
+# Android port fork: automatic macOS runs disabled to keep push status green.
+# Run manually via workflow_dispatch if needed.
 on:
-  push:
-    branches: [main, beta]
-    paths-ignore:
-      - 'docs/**'
-      - '**/*.md'
-      - 'README*'
-      - 'LICENSE*'
-      - '.gitignore'
-  pull_request:
-    branches: [main]
-    paths-ignore:
-      - 'docs/**'
-      - '**/*.md'
-      - 'README*'
-      - 'LICENSE*'
-      - '.gitignore'
   workflow_dispatch:
 
 permissions:

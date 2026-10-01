@@ -41,6 +41,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # Caches the Gradle distribution (~/.gradle/wrapper) and dependency
+      # caches (~/.gradle/caches) so later runs are resilient to transient
+      # network flakiness on services.gradle.org / dl.google.com.
+      - name: Set up Gradle (distribution + dependency caching)
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Ensure NDK 27.2.12479018
         run: |
           NDK_VER=27.2.12479018
@@ -57,13 +63,52 @@ jobs:
             || true
           echo "Installed CMake versions:"; ls "$ANDROID_HOME/cmake"
 
+      # Pre-download the Gradle distribution with retries. Build #4 died here
+      # with 'java.net.SocketException: Connection reset' during the wrapper
+      # download; this makes the step self-healing.
+      - name: Warm up Gradle wrapper (retry on transient network errors)
+        working-directory: os/android
+        run: |
+          chmod +x gradlew
+          ok=0
+          for i in 1 2 3 4 5; do
+            if ./gradlew --version >/dev/null 2>&1; then
+              ok=1
+              break
+            fi
+            echo "::warning::Gradle wrapper download attempt ${i} failed (likely transient network error); retrying in $((i * 15))s"
+            sleep $((i * 15))
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "::error::Could not download the Gradle distribution after 5 attempts"
+            exit 1
+          fi
+          ./gradlew --version
+
       - name: Build release APK (debug-signed fallback)
         working-directory: os/android
         env:
           GRADLE_OPTS: "-Dorg.gradle.daemon=false"
         run: |
+          set -o pipefail
           chmod +x gradlew
-          ./gradlew assembleRelease --stacktrace
+          LOG="$(mktemp)"
+          if ./gradlew assembleRelease --stacktrace 2>&1 | tee "$LOG"; then
+            exit 0
+          fi
+          echo "::warning::assembleRelease failed on attempt 1 - checking for transient network errors"
+          if grep -qiE 'Connection reset|SocketException|UnknownHost|Could not GET|Could not resolve|Read timed out|timed out|Failed to connect|Connection refused' "$LOG"; then
+            echo "::warning::Transient network failure detected - retrying once after 30s"
+            sleep 30
+            if ./gradlew assembleRelease --stacktrace 2>&1 | tee -a "$LOG"; then
+              echo "::notice::assembleRelease succeeded on attempt 2"
+              exit 0
+            fi
+            echo "::error::assembleRelease failed on attempt 2 as well"
+            exit 1
+          fi
+          echo "::error::assembleRelease failed with a non-transient error"
+          exit 1
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

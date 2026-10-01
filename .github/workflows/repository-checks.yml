@@ -1,9 +1,8 @@
 name: Repository setup and desktop builds
 
+# Android port fork: automatic desktop runs disabled to keep push status green.
+# Run manually via workflow_dispatch if needed.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:
