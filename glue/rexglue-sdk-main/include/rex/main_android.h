@@ -13,6 +13,8 @@
 
 #if defined(__ANDROID__)
 #include <android/api-level.h>
+#include <cstdlib>
+#include <sys/system_properties.h>
 #endif
 
 namespace rex {
@@ -22,7 +24,22 @@ namespace rex {
 /// code-path: `if (rex::GetAndroidApiLevel() >= 26) { ... }`.
 inline int32_t GetAndroidApiLevel() {
 #if defined(__ANDROID__)
+#if __ANDROID_API__ >= 29
   return android_get_device_api_level();
+#else
+  // android_get_device_api_level() is only available on API 29+; targets
+  // below that (the Android port compiles with android-26) must read the
+  // system property instead.
+  char value[PROP_VALUE_MAX] = {0};
+  int length = __system_property_get("ro.build.version.sdk", value);
+  if (length > 0) {
+    int level = std::atoi(value);
+    if (level > 0) {
+      return level;
+    }
+  }
+  return 0;
+#endif
 #else
   return 0;
 #endif
