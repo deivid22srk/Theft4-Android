@@ -37,7 +37,7 @@ class ScopedScaledSteeringBias
 public:
     ScopedScaledSteeringBias(std::uint8_t* base, std::uint32_t vehicle,
                              float timeStepSeconds) noexcept
-        : base_(base),
+        : base(base),
           address_(vehicle + kSteeringBiasOffset),
           originalBits_(PPC_LOAD_U32(address_))
     {
@@ -55,7 +55,7 @@ public:
     ScopedScaledSteeringBias& operator=(const ScopedScaledSteeringBias&) = delete;
 
 private:
-    std::uint8_t* base_;
+    std::uint8_t* base;
     std::uint32_t address_;
     std::uint32_t originalBits_;
 };
