@@ -792,3 +792,9 @@ CMakeUserPresets.json
 !/tests/ios/test_capture_defaults.py
 !/docs/THEFT4_LAB_PACING_CAPTURE.md
 !/tools/analyze_lab_pacing.py
+
+# scripts/ is local-dev-only, but the BIN2C generator is required by the
+# cross-compile build (see LibertyRecomp/CMakeLists.txt BIN2C).
+!scripts/
+scripts/*
+!scripts/file_to_c.py
