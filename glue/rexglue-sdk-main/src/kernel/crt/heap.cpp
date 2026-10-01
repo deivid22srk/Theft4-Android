@@ -271,7 +271,7 @@ uint32_t ReXHeap::AllocLocked(uint32_t size, bool zero) {
 
     auto* hdr = static_cast<SizeHeader*>(ptr);
     hdr->requested_size = size;
-    hdr->reserved = 0;
+    std::memset(hdr->reserved, 0, sizeof(hdr->reserved));
 
     void* user_ptr = static_cast<uint8_t*>(ptr) + kHeaderSize;
     if (zero) {
