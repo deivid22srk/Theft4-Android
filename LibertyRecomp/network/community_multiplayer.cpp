@@ -341,6 +341,7 @@ public:
   std::vector<SessionRecord> Search(uint32_t title_id, uint32_t media_id,
                                     uint32_t title_version,
                                     uint32_t protocol_version,
+                                    uint32_t procedure_index,
                                     std::span<const SessionContext> contexts,
                                     std::span<const SessionProperty> properties,
                                     uint32_t maximum_results) override;
@@ -348,7 +349,8 @@ public:
   bool Modify(const SessionRecord &session) override;
   bool Join(uint64_t session_id, const SessionMember &member) override;
   bool Leave(uint64_t session_id, uint64_t xuid) override;
-  bool Migrate(uint64_t session_id, const SessionRecord &replacement) override;
+  std::optional<SessionRecord> Migrate(uint64_t session_id,
+                                       const SessionRecord &replacement) override;
   bool Delete(uint64_t session_id) override;
 
   void RegisterRoute(uint32_t virtual_ipv4,
@@ -968,8 +970,12 @@ bool CommunityMultiplayerBackend::Heartbeat(const SessionRecord &session) {
 
 std::vector<SessionRecord> CommunityMultiplayerBackend::Search(
     uint32_t title_id, uint32_t media_id, uint32_t title_version,
-    uint32_t protocol_version, std::span<const SessionContext> contexts,
+    uint32_t protocol_version, uint32_t procedure_index,
+    std::span<const SessionContext> contexts,
     std::span<const SessionProperty> properties, uint32_t maximum_results) {
+  // procedure_index is part of the title-facing search protocol; the community
+  // directory filters server-side and does not consume it.
+  (void)procedure_index;
   json encoded_contexts = json::array();
   for (const auto &context : contexts) {
     encoded_contexts.push_back(ContextToJson(context));
@@ -1064,8 +1070,8 @@ bool CommunityMultiplayerBackend::Leave(uint64_t session_id, uint64_t xuid) {
                         &request, &updated);
 }
 
-bool CommunityMultiplayerBackend::Migrate(uint64_t session_id,
-                                          const SessionRecord &replacement) {
+std::optional<SessionRecord> CommunityMultiplayerBackend::Migrate(
+    uint64_t session_id, const SessionRecord &replacement) {
   SessionRecord published = replacement;
   if (replacement.host_xuid == identity_.xuid) {
     published.host_ipv4 = local_virtual_ipv4_;
@@ -1076,14 +1082,16 @@ bool CommunityMultiplayerBackend::Migrate(uint64_t session_id,
   if (!RequestSession("POST",
                       fmt::format("/v1/sessions/{:016x}/migrate", session_id),
                       &request, &updated)) {
-    return false;
+    return std::nullopt;
   }
   std::lock_guard lock(session_mutex_);
   hosted_sessions_.erase(session_id);
   if (updated.host_xuid == identity_.xuid) {
-    hosted_sessions_[updated.session_id] = std::move(updated);
+    hosted_sessions_[updated.session_id] = updated;
   }
-  return true;
+  // Return the directory-committed replacement record; the session owner uses
+  // it instead of the pre-normalization proposal.
+  return updated;
 }
 
 bool CommunityMultiplayerBackend::Delete(uint64_t session_id) {
