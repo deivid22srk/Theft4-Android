@@ -44,8 +44,17 @@ jobs:
       # Caches the Gradle distribution (~/.gradle/wrapper) and dependency
       # caches (~/.gradle/caches) so later runs are resilient to transient
       # network flakiness on services.gradle.org / dl.google.com.
+      #
+      # validate-wrappers is disabled because the SDL submodules vendored in
+      # thirdparty/SDL and glue/rexglue-sdk-main ship their own
+      # android-project gradle-wrapper.jar builds whose checksums are not in
+      # the official wrapper checksum database. Those wrappers are never
+      # executed by this workflow; the only wrapper we run (os/android) was
+      # verified byte-identical to the official Gradle 8.11.1 one.
       - name: Set up Gradle (distribution + dependency caching)
         uses: gradle/actions/setup-gradle@v4
+        with:
+          validate-wrappers: false
 
       - name: Ensure NDK 27.2.12479018
         run: |
