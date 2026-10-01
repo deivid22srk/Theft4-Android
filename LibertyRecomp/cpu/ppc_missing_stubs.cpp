@@ -9,7 +9,7 @@
  * the corresponding stub from this file.
  */
 
-#include <rex/ppc/context.h>
+#include "ppc_context.h"
 
 // game_init.cpp
 PPC_FUNC_IMPL(__imp__sub_8218C600) { }
