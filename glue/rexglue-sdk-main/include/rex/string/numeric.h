@@ -12,6 +12,7 @@
 
 #include <charconv>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <string_view>
@@ -23,6 +24,39 @@
 #include <rex/vec128.h>
 
 namespace rex::string {
+namespace detail {
+
+// libc++ (as shipped with the Android NDK and, currently, upstream) does not
+// implement floating-point std::from_chars (__cpp_lib_to_chars is undefined).
+// Fall back to strtod over a NUL-terminated copy of the range; libstdc++ and
+// MSVC STL take the standard path.
+template <typename T>
+inline std::from_chars_result from_chars_floating_point(const char* first,
+                                                        const char* last,
+                                                        T& value) {
+#if defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L
+  return std::from_chars(first, last, value, std::chars_format::general);
+#else
+  char buffer[512];
+  size_t length = static_cast<size_t>(last - first);
+  if (length >= sizeof(buffer)) {
+    return {first, std::errc::result_out_of_range};
+  }
+  std::memcpy(buffer, first, length);
+  buffer[length] = '\0';
+  char* end = nullptr;
+  double parsed = std::strtod(buffer, &end);
+  if (end == buffer) {
+    return {first, std::errc::invalid_argument};
+  }
+  // std::from_chars must return a pointer into the caller's range; map the
+  // consumed length back instead of returning the local buffer pointer.
+  value = static_cast<T>(parsed);
+  return {first + (end - buffer), std::errc()};
+#endif
+}
+
+}  // namespace detail
 
 inline std::string to_hex_string(uint32_t value) {
   return fmt::format("{:08X}", value);
@@ -133,8 +167,8 @@ inline T fpfs(const std::string_view value, bool force_hex) {
     }
     std::memcpy(&result, &pun, sizeof(PUN));
   } else {
-    auto [p, error] = std::from_chars(range.data(), range.data() + range.size(), result,
-                                      std::chars_format::general);
+    auto [p, error] = detail::from_chars_floating_point(range.data(), range.data() + range.size(),
+                                                        result);
     // TODO(gibbed): do something more with errors?
     if (error != std::errc()) {
       assert_always();
@@ -253,7 +287,7 @@ inline vec128_t from_string<vec128_t>(const std::string_view value, bool force_h
         assert_always();
         return vec128_t();
       }
-      auto result = std::from_chars(p, end, v.f32[i], std::chars_format::general);
+      auto result = detail::from_chars_floating_point(p, end, v.f32[i]);
       if (result.ec != std::errc()) {
         assert_always();
         return vec128_t();
