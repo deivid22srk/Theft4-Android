@@ -392,7 +392,8 @@ class AndroidFileHandle : public FileHandle {
 };
 
 std::unique_ptr<FileHandle> FileHandle::OpenExisting(
-    const std::filesystem::path& path, uint32_t desired_access) {
+    const std::filesystem::path& path, uint32_t desired_access,
+    bool /*allow_share_delete*/) {
   int open_access = 0;
   if (desired_access & FileAccess::kGenericRead) open_access |= O_RDONLY;
   if (desired_access & FileAccess::kGenericWrite) open_access |= O_WRONLY;
