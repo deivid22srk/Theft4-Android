@@ -22,6 +22,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -30,6 +31,111 @@
 #include <rex/literals.h>
 #include <rex/platform.h>
 #include <rex/thread/timer_queue.h>
+
+// std::jthread / std::stop_token compatibility shim ---------------------------
+// libc++ has never shipped std::jthread, and the libc++ bundled with the
+// Android NDK (r27, LLVM 18.0.x) also lacks std::stop_token, so Android
+// cross-builds cannot use the standard types. Use std::jthread where the
+// standard library actually provides it (libstdc++, MSVC STL) via the
+// __cpp_lib_jthread feature macro, and a minimal cooperative shim everywhere
+// else. The shim semantics match std::jthread where it matters here: the
+// destructor requests stop and joins, and the thread body optionally receives
+// a StopToken as its first argument.
+#if defined(__cpp_lib_jthread) && __cpp_lib_jthread >= 201911L
+#include <stop_token>
+#define REX_HAS_STD_JTHREAD 1
+#endif
+
+namespace rex::thread {
+
+#ifdef REX_HAS_STD_JTHREAD
+
+using StopToken = std::stop_token;
+using JThread = std::jthread;
+
+#else  // !REX_HAS_STD_JTHREAD
+
+// Minimal std::stop_token-like handle backed by a shared atomic flag.
+class StopToken {
+ public:
+  StopToken() noexcept = default;
+
+  bool stop_requested() const noexcept {
+    return state_ && state_->load(std::memory_order_acquire);
+  }
+
+ private:
+  friend class JThread;
+  explicit StopToken(std::shared_ptr<std::atomic<bool>> state) noexcept
+      : state_(std::move(state)) {}
+
+  std::shared_ptr<std::atomic<bool>> state_;
+};
+
+// Minimal std::jthread-like thread with cooperative stop support.
+class JThread {
+ public:
+  JThread() noexcept = default;
+
+  template <typename Functor>
+  explicit JThread(Functor&& functor) {
+    auto state = std::make_shared<std::atomic<bool>>(false);
+    if constexpr (std::is_invocable_v<std::decay_t<Functor>&, StopToken>) {
+      std::thread([functor = std::forward<Functor>(functor), state]() mutable {
+        functor(StopToken(state));
+      }).swap(thread_);
+    } else {
+      std::thread(std::forward<Functor>(functor)).swap(thread_);
+    }
+    state_ = std::move(state);
+  }
+
+  ~JThread() {
+    if (thread_.joinable()) {
+      request_stop();
+      thread_.join();
+    }
+  }
+
+  JThread(const JThread&) = delete;
+  JThread& operator=(const JThread&) = delete;
+
+  JThread(JThread&& other) noexcept = default;
+  JThread& operator=(JThread&& other) noexcept {
+    if (this != &other) {
+      if (thread_.joinable()) {
+        request_stop();
+        thread_.join();
+      }
+      thread_ = std::move(other.thread_);
+      state_ = std::move(other.state_);
+    }
+    return *this;
+  }
+
+  bool joinable() const noexcept { return thread_.joinable(); }
+  void join() { thread_.join(); }
+  void detach() { thread_.detach(); }
+  std::thread::id get_id() const noexcept { return thread_.get_id(); }
+
+  bool request_stop() noexcept {
+    if (!state_) {
+      return false;
+    }
+    bool expected = false;
+    return state_->compare_exchange_strong(expected, true,
+                                           std::memory_order_acq_rel,
+                                           std::memory_order_acquire);
+  }
+
+ private:
+  std::shared_ptr<std::atomic<bool>> state_;
+  std::thread thread_;
+};
+
+#endif  // REX_HAS_STD_JTHREAD
+
+}  // namespace rex::thread
 
 namespace rex::thread {
 
