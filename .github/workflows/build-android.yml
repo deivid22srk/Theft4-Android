@@ -101,6 +101,9 @@ jobs:
         run: |
           set -o pipefail
           chmod +x gradlew
+          # The BIN2C code generator (scripts/file_to_c.py) needs a zstd
+          # backend when it regenerates embedded assets during the build.
+          python3 -m pip install --quiet zstandard || sudo apt-get install -y -q zstd || true
           LOG="$(mktemp)"
           if ./gradlew assembleRelease --stacktrace 2>&1 | tee "$LOG"; then
             exit 0
