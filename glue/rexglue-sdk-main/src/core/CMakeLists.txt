@@ -97,13 +97,16 @@ elseif(APPLE)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
     # Bionic has no ucontext fiber API; fiber_android.cpp provides the
     # setjmp/longjmp + aarch64 stack-pivot backend instead.
+    # filesystem_android.cpp mirrors filesystem_posix.cpp but routes
+    # user/caches folders through the Java Context and adds the
+    # content:// URI descriptor support (no $HOME on Android).
     target_sources(rexcore PRIVATE
         atomic_posix.cpp
         clock_posix.cpp
         dbg_posix.cpp
         dynlib_posix.cpp
         exception_handler_posix.cpp
-        filesystem_posix.cpp
+        filesystem_android.cpp
         fiber_android.cpp
         mapped_memory_posix.cpp
         math_gcc.cpp
