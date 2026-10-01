@@ -116,8 +116,12 @@ using XSystemClock = detail::NtSystemClock<detail::Domain::Guest>;
 
 namespace std::chrono {
 
-#ifdef __APPLE__
-// Apple libc++ does not expose clock_time_conversion or clock_cast.
+#if defined(__APPLE__) || defined(_LIBCPP_VERSION)
+// libc++ (macOS and Android/NDK alike) does not expose
+// std::chrono::clock_time_conversion or std::chrono::clock_cast — libstdc++
+// and MSVC STL do. Declare the fallback primary template for every libc++
+// build; the Android NDK cross-build hits this exact gap (verified against
+// LLVM 18 and llvm-project main).
 template <class, class>
 struct clock_time_conversion {};
 
