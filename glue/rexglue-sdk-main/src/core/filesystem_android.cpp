@@ -39,7 +39,9 @@
 
 // Provided by the host Android app (LibertyRecomp jni_glue.cpp). Returns
 // the JavaVM captured in JNI_OnLoad, or null in non-JVM builds.
-extern "C" JavaVM* rex_android_get_jvm();
+// The reference is weak so the SDK's standalone librexruntimerd.so still
+// links without a JVM host; both call sites handle a null return.
+extern "C" __attribute__((weak)) JavaVM* rex_android_get_jvm();
 
 namespace rex {
 

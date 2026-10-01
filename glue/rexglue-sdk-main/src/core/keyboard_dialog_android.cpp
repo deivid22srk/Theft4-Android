@@ -32,8 +32,9 @@
 #include <string>
 
 // Provided by the Android app glue (same mechanism SDL/NativeActivity use).
-// LibertyRecomp's android startup stashes the JavaVM here.
-extern "C" JavaVM* rex_android_get_jvm();
+// LibertyRecomp's android startup stashes the JavaVM here. Weak so the SDK's
+// standalone runtime links without a JVM host; callers handle null.
+extern "C" __attribute__((weak)) JavaVM* rex_android_get_jvm();
 
 namespace rex {
 namespace kernel {
