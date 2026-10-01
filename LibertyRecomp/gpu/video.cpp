@@ -10388,7 +10388,7 @@ static constexpr uint32_t kTextureFetchBase = 1152;
 static constexpr uint32_t kResourceFenceOffset = 8;
 static constexpr uint32_t kLiveResourceFenceOffset = 10908;
 
-static void RetireNativeBoundResource(uint32_t deviceAddr, uint32_t resourceAddr)
+static void RetireNativeBoundResource(uint8_t* base, uint32_t deviceAddr, uint32_t resourceAddr)
 {
     if (resourceAddr == 0)
         return;
@@ -10428,7 +10428,7 @@ PPC_FUNC_HOOK(sub_82A3B690)
     }
 
     const uint32_t slotAddr = deviceAddr + kStreamBufferBase + streamIndex * 4;
-    RetireNativeBoundResource(deviceAddr, PPC_LOAD_U32(slotAddr));
+    RetireNativeBoundResource(base, deviceAddr, PPC_LOAD_U32(slotAddr));
     PPC_STORE_U32(slotAddr, bufferAddr);
 
     const uint32_t frequency = (stride >> 2) & 0xFF;
@@ -10451,7 +10451,7 @@ PPC_FUNC_HOOK(sub_82A3B7B0)
     const uint32_t bufferAddr = ctx.r4.u32;
     const uint32_t slotAddr = deviceAddr + kIndexBufferOffset;
 
-    RetireNativeBoundResource(deviceAddr, PPC_LOAD_U32(slotAddr));
+    RetireNativeBoundResource(base, deviceAddr, PPC_LOAD_U32(slotAddr));
     PPC_STORE_U32(slotAddr, bufferAddr);
 
     auto* device = reinterpret_cast<GuestDevice*>(g_memory.Translate(deviceAddr));
@@ -10621,7 +10621,7 @@ PPC_FUNC_HOOK(sub_82A44B78)
     }
 
     PPC_STORE_U32(slotAddr, textureAddr);
-    RetireNativeBoundResource(deviceAddr, previousTexture);
+    RetireNativeBoundResource(base, deviceAddr, previousTexture);
 
     if (slot < 16)
     {
