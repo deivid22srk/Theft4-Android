@@ -36,6 +36,8 @@
 #include <rex/ui/surface_mac.h>
 #include "accelerated_pointer_mac.h"
 #include "sdl_mouse_motion_policy.h"
+#elif REX_PLATFORM_ANDROID
+#include <rex/ui/surface_android.h>
 #else
 #include <X11/Xlib-xcb.h>
 #include <rex/ui/surface_gnulinux.h>
@@ -472,6 +474,15 @@ std::unique_ptr<Surface> WindowSDL::CreateSurfaceImpl(Surface::TypeFlags allowed
   if (allowed_types & Surface::kTypeFlag_CAMetalLayer) {
     if (void* layer = GetOrCreateMetalLayer()) {
       return std::make_unique<CAMetalLayerSurface>(sdl_window_, layer);
+    }
+  }
+#elif REX_PLATFORM_ANDROID
+  if (allowed_types & Surface::kTypeFlag_AndroidNativeWindow) {
+    SDL_PropertiesID props = SDL_GetWindowProperties(sdl_window_);
+    auto* window = static_cast<ANativeWindow*>(
+        SDL_GetPointerProperty(props, SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr));
+    if (window) {
+      return std::make_unique<AndroidNativeWindowSurface>(window);
     }
   }
 #else
