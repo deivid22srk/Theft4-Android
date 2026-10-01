@@ -94,6 +94,27 @@ elseif(APPLE)
         system_posix.cpp
         threading_mac.cpp
     )
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    # Bionic has no ucontext fiber API; fiber_android.cpp provides the
+    # setjmp/longjmp + aarch64 stack-pivot backend instead.
+    target_sources(rexcore PRIVATE
+        atomic_posix.cpp
+        clock_posix.cpp
+        dbg_posix.cpp
+        dynlib_posix.cpp
+        exception_handler_posix.cpp
+        filesystem_posix.cpp
+        fiber_android.cpp
+        mapped_memory_posix.cpp
+        math_gcc.cpp
+        memory_posix.cpp
+        platform/console_posix.cpp
+        platform/env_posix.cpp
+        seh_posix.cpp
+        socket_posix.cpp
+        system_posix.cpp
+        threading_posix.cpp
+    )
 elseif(UNIX)
     target_sources(rexcore PRIVATE
         atomic_posix.cpp
@@ -143,6 +164,8 @@ endif()
 
 if(APPLE)
     target_link_libraries(rexcore PRIVATE pthread)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    # pthread/rt/dl are part of libc on bionic; no extra libs needed.
 elseif(UNIX)
     target_link_libraries(rexcore PRIVATE pthread rt dl)
 endif()

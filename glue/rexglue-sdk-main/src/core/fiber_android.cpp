@@ -21,17 +21,17 @@
 #include <cstdlib>
 #include <cstring>
 
-static_assert(sizeof(jmp_buf) <= 256, "jmp_buf exceeds Fiber::jmpbuf_ storage");
+static_assert(sizeof(jmp_buf) <= 256, "jmp_buf exceeds Fiber::context_ storage");
 
 namespace rex::thread {
 
 thread_local Fiber* Fiber::tls_current_ = nullptr;
 
-#define FIBER_JMP_BUF(f) (*reinterpret_cast<jmp_buf*>((f)->jmpbuf_))
+#define FIBER_JMP_BUF(f) (*reinterpret_cast<jmp_buf*>((f)->context_))
 
 Fiber* Fiber::ConvertCurrentThread() {
   auto* f = new Fiber();
-  std::memset(f->jmpbuf_, 0, sizeof(f->jmpbuf_));
+  std::memset(f->context_, 0, sizeof(f->context_));
   f->is_thread_fiber_ = true;
   f->started_ = true;
   tls_current_ = f;
@@ -46,7 +46,7 @@ Fiber* Fiber::Create(size_t stack_size, void (*entry)(void*), void* arg) {
   if (!stack) return nullptr;
 
   auto* f = new Fiber();
-  std::memset(f->jmpbuf_, 0, sizeof(f->jmpbuf_));
+  std::memset(f->context_, 0, sizeof(f->context_));
   f->stack_ = stack;
   f->stack_size_ = stack_size;
   f->entry_ = entry;
