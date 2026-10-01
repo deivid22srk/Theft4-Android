@@ -1,0 +1,70 @@
+name: build-android
+
+# Builds the Theft4 / LibertyRecomp Android APK (arm64-v8a) on every push.
+#
+# No game files are needed at build time: LIBERTY_RECOMP_ANDROID_RUNTIME_ASSETS=ON
+# (set in os/android/app/build.gradle.kts) makes the app request the game
+# folder from the user at runtime via the in-app picker. Do NOT add any
+# default.xex / *.rpf to this repository — they are copyrighted.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+concurrency:
+  group: build-android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    name: Android APK (arm64-v8a)
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Ensure NDK 27.2.12479018
+        run: |
+          NDK_VER=27.2.12479018
+          if [ ! -d "$ANDROID_HOME/ndk/$NDK_VER" ]; then
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VER" >/dev/null
+          fi
+          echo "Installed NDKs:"; ls "$ANDROID_HOME/ndk"
+
+      - name: Ensure SDK CMake >= 3.29
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "cmake;3.31.1" \
+            || "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "cmake;3.30.4" \
+            || true
+          echo "Installed CMake versions:"; ls "$ANDROID_HOME/cmake"
+
+      - name: Build release APK (debug-signed fallback)
+        working-directory: os/android
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --stacktrace
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Theft4-Android-APK
+          path: os/android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 14

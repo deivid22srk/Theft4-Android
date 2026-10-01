@@ -58,8 +58,10 @@ android {
         cmake {
             // Reach the repo root to reuse the shared CMakeLists.txt.
             // os/android/app/build.gradle.kts → ../../../CMakeLists.txt
+            // "3.22.1+" lets Gradle pick the newest SDK-installed CMake; CI
+            // installs cmake;3.31.1 (root CMakeLists requires >= 3.29).
             path    = file("../../../CMakeLists.txt")
-            version = "3.31.4"
+            version = "3.22.1+"
         }
     }
 
