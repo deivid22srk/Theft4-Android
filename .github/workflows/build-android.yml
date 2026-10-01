@@ -31,6 +31,10 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Initialize pinned dependencies (submodules + patches)
+        run: |
+          python3 tools/setup_repo.py --jobs 8
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
