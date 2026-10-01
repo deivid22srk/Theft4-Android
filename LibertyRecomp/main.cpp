@@ -71,8 +71,13 @@
 #include <rex/runtime.h>
 // #include <rex/runtime/guest/exceptions.h>  // Not present in graine SDK; unused
 // #include <rex/runtime/processor.h>         // Not present in graine SDK; unused
+#include <rex/cvar.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xthread.h>
+
+// rexcrt heap size is defined via REXCVAR_DEFINE_UINT32 in rexglue's
+// kernel/crt/heap.cpp; declare the storage accessor for this TU.
+REXCVAR_DECLARE(uint32_t, rexcrt_heap_size_mb);
 #include <rex/system/xobject.h>
 #include <rex/system/user_module.h>
 #include <rex/kernel/xam/apps/xgi_app.h>
@@ -797,7 +802,8 @@ int main(int argc, char *argv[])
         // this for ReXApp-derived apps, but Liberty owns its own main() so we
         // have to call it ourselves. Without this rexcrt_RtlAllocateHeap fails
         // with "kernel memory is null" on every guest alloc → SIGBUS.
-        if (!rex::kernel::crt::InitHeap(FLAGS_rexcrt_heap_size_mb, s_rexRuntime->memory())) {
+        if (!rex::kernel::crt::InitHeap(REXCVAR_GET(rexcrt_heap_size_mb),
+                                        s_rexRuntime->memory())) {
             fprintf(stderr, "[Main] FATAL: rexcrt heap init failed\n");
             std::_Exit(1);
         }
@@ -807,7 +813,7 @@ int main(int argc, char *argv[])
             auto* p = s_rexRuntime->function_dispatcher();
             PPCFunc* xsf = p->GetFunction(0x82A11290);
             fprintf(stderr, "[DIAG] After Setup(): GetFunction(0x82A11290)=%p  HasFT=%d\n",
-                    (void*)xsf, (int)p->HasFunctionTable());
+                    (void*)xsf, (int)p->HasAnyFunctionTable());
             int total = 0, nullHost = 0;
             bool foundEntry = false;
             for (int i = 0; PPCFuncMappings[i].guest != 0; ++i) {

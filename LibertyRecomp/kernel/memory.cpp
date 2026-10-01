@@ -4,6 +4,7 @@
 #include "../cpu/ppc_context.h"
 
 #include <rex/system/xmemory.h>
+#include <rex/runtime.h>
 #include <rex/logging.h>
 #include <os/diag.h>
 
@@ -73,7 +74,7 @@ void Memory::InitializeFromRexGlue()
     PopulateFunctionTableAndVtables();
 
     DIAG_EMIT("[DIAG] Post-Populate GetFunction(0x82A692C8)=%p\n",
-              (void*)rex_memory_->GetFunction(0x82A692C8));
+              (void*)rex::Runtime::instance()->function_dispatcher()->GetFunction(0x82A692C8));
 }
 
 void Memory::PopulateFunctionTableAndVtables()
