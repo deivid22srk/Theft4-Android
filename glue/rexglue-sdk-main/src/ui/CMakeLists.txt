@@ -153,7 +153,10 @@ if(REXGLUE_USE_VULKAN)
 endif()
 
 # Platform-specific dependencies
-if(UNIX AND NOT APPLE)
+# NOT ANDROID: the NDK toolchain sets UNIX=1/APPLE=0, but X11-xcb does not
+# exist on Android; the Android Vulkan backend uses VK_KHR_android_surface
+# instead (see include/rex/ui/vulkan/api.h).
+if(UNIX AND NOT APPLE AND NOT ANDROID)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(X11_XCB REQUIRED x11-xcb)
 
