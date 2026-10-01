@@ -35,7 +35,9 @@ namespace {
 
 struct SizeHeader {
   uint64_t requested_size;
-  uint64_t reserved;  // padding to O1HEAP_ALIGNMENT
+  // Padding so the header spans exactly one O1HEAP_ALIGNMENT unit
+  // (sizeof(void*) * 4): 24 extra bytes on 64-bit, 8 on 32-bit.
+  uint64_t reserved[(sizeof(void*) * 4U - sizeof(uint64_t)) / sizeof(uint64_t)];
 };
 static_assert(sizeof(SizeHeader) == O1HEAP_ALIGNMENT,
               "SizeHeader must be exactly one O1HEAP_ALIGNMENT unit");
@@ -55,6 +57,26 @@ constexpr uint32_t HEAP_ZERO_MEMORY = 0x00000008;
 // ---------------------------------------------------------------------------
 
 namespace rex::kernel::crt {
+
+namespace {
+// o1heap does not expose a realloc; emulate one within a single segment via
+// allocate + copy + free. `block` is the o1heap block pointer (SizeHeader
+// included); new_block_size is the full new block size (header included).
+void* O1HeapReallocateWithinSegment(O1HeapInstance* heap, void* block,
+                                    size_t new_block_size) {
+  void* new_block = o1heapAllocate(heap, new_block_size);
+  if (!new_block) {
+    return nullptr;
+  }
+  auto* old_hdr = static_cast<SizeHeader*>(block);
+  auto* new_hdr = static_cast<SizeHeader*>(new_block);
+  const size_t new_payload = new_block_size - kHeaderSize;
+  const size_t copy_size = std::min<size_t>(old_hdr->requested_size, new_payload);
+  std::memcpy(new_hdr + 1, old_hdr + 1, copy_size);
+  o1heapFree(heap, block);
+  return new_block;
+}
+}  // namespace
 
 void* ReXHeap::GuestToHost(uint32_t guest_addr) const {
   return membase_ + guest_addr;
@@ -151,7 +173,8 @@ uint32_t ReXHeap::Realloc(uint32_t guest_addr, uint32_t new_size, bool zero_new)
 
   auto* old_hdr = static_cast<SizeHeader*>(real_host);
   uint32_t old_size = static_cast<uint32_t>(old_hdr->requested_size);
-  void* new_ptr = o1heapReallocate(segment->heap, real_host, new_size + kHeaderSize);
+  void* new_ptr =
+      O1HeapReallocateWithinSegment(segment->heap, real_host, new_size + kHeaderSize);
   if (!new_ptr) {
     // Cross-segment fallback: allocate a fresh block, copy, then free old.
     uint32_t new_guest = AllocLocked(new_size, false);
