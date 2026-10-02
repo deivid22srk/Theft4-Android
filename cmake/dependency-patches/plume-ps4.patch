@@ -1,5 +1,5 @@
 diff --git a/plume_render_interface_types.h b/plume_render_interface_types.h
-index 9dcfedf5a2783b0c31c8a878c4d65e6b7039291e..34847b9b424425b6e0d18177ec2b22b99d4b6562 100644
+index 9dcfedf..34847b9 100644
 --- a/plume_render_interface_types.h
 +++ b/plume_render_interface_types.h
 @@ -60,6 +60,15 @@ namespace plume {
@@ -18,3 +18,204 @@ index 9dcfedf5a2783b0c31c8a878c4d65e6b7039291e..34847b9b424425b6e0d18177ec2b22b9
  #else
      static_assert(false, "RenderWindow was not defined for this platform.");
  #endif
+diff --git a/plume_vulkan.cpp b/plume_vulkan.cpp
+index f1dd503..fe655af 100644
+--- a/plume_vulkan.cpp
++++ b/plume_vulkan.cpp
+@@ -24,6 +24,118 @@
+ #   define VULKAN_OBJECT_NAMES_ENABLED
+ #endif
+ 
++#if defined(__ANDROID__)
++// ── Custom Adreno driver support (libadrenotools) ────────────────────────────
++//
++// plume owns the Vulkan loader on Android (volk). When the app activates a
++// custom Adreno driver (Mesa turnip etc.) via files/drivers/active.txt,
++// LibertyRecomp's JNI glue exports REX_VULKAN_LOADER_PATH (the driver .so
++// path) and REX_ANDROID_NATIVE_LIB_DIR (nativeLibraryDir, home of
++// libadrenotools.so + its hook libraries). In that case volk is initialized
++// against adrenotools' hooked loader — which is the system libvulkan.so
++// opened inside a linker namespace that redirects driver loading to the
++// custom Turnip .so — so the instance, device, Android surface and swapchain
++// created by this file all run on the custom driver.
++//
++// Any failure falls back to the system loader via volkInitialize(); the
++// outcome is written to <files>/drivers/last_boot.txt for the app UI.
++#include <android/log.h>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <dlfcn.h>
++#include <string>
++
++namespace plume {
++namespace {
++
++void RexWriteDriverBootOutcome(const char *status, const char *driver, const char *error) {
++    const char *files_dir = std::getenv("REX_ANDROID_FILES_DIR");
++    if (!files_dir || !*files_dir) return;
++    char path[512];
++    std::snprintf(path, sizeof(path), "%s/drivers/last_boot.txt", files_dir);
++    FILE *f = std::fopen(path, "w");
++    if (!f) return;
++    std::fprintf(f, "status=%s\ndriver=%s\nerror=%s\n",
++                 status ? status : "unknown", driver ? driver : "-",
++                 error ? error : "-");
++    std::fclose(f);
++    __android_log_print(ANDROID_LOG_INFO, "plume",
++                        "Vulkan driver boot outcome: %s (%s) %s", status,
++                        driver ? driver : "-", error ? error : "-");
++}
++
++// Returns VK_SUCCESS after volk has been initialized (custom driver when
++// active, system loader otherwise); a VK_ERROR_* result means volkInitialize
++// itself failed and the caller should abort.
++VkResult RexAdrenotoolsVolkInitialize() {
++    using OpenLibvulkanFn = void *(*)(int, int, const char *, const char *,
++                                      const char *, const char *, const char *,
++                                      void **);
++    const char *loader_path = std::getenv("REX_VULKAN_LOADER_PATH");
++    if (!loader_path || !*loader_path) {
++        return volkInitialize();  // no custom driver — system loader (normal path)
++    }
++    const char *native_lib_dir = std::getenv("REX_ANDROID_NATIVE_LIB_DIR");
++    if (!native_lib_dir || !*native_lib_dir) {
++        RexWriteDriverBootOutcome("custom_failed", loader_path, "native lib dir unknown");
++        return volkInitialize();
++    }
++
++    std::string adrenotools_path =
++        std::string(native_lib_dir) + "/libadrenotools.so";
++    void *adrenotools = dlopen(adrenotools_path.c_str(), RTLD_NOW | RTLD_LOCAL);
++    if (!adrenotools) {
++        RexWriteDriverBootOutcome("custom_failed", loader_path, dlerror());
++        return volkInitialize();
++    }
++
++    auto open_libvulkan = reinterpret_cast<OpenLibvulkanFn>(
++        dlsym(adrenotools, "adrenotools_open_libvulkan"));
++    if (!open_libvulkan) {
++        RexWriteDriverBootOutcome("custom_failed", loader_path,
++                                  "adrenotools_open_libvulkan missing");
++        return volkInitialize();
++    }
++
++    // adrenotools concatenates dir + name WITHOUT inserting a separator, so
++    // the directory part must keep its trailing '/'.
++    std::string driver_path(loader_path);
++    const size_t last_slash = driver_path.find_last_of('/');
++    std::string driver_name =
++        last_slash == std::string::npos ? driver_path : driver_path.substr(last_slash + 1);
++    std::string driver_dir = driver_path.substr(0, last_slash + 1);
++
++    // ADRENOTOOLS_DRIVER_CUSTOM == 1 << 0. tmpLibDir is only needed on API < 29
++    // (no memfd); the app requires API 26 but drivers on 26-28 would need it —
++    // adrenotools returns null there and we fall back cleanly.
++    constexpr int kAdrenoToolsDriverCustom = 1 << 0;
++    void *handle = open_libvulkan(RTLD_NOW, kAdrenoToolsDriverCustom, nullptr,
++                                  native_lib_dir, driver_dir.c_str(),
++                                  driver_name.c_str(), nullptr, nullptr);
++    if (!handle) {
++        RexWriteDriverBootOutcome("custom_failed", driver_name.c_str(),
++                                  "adrenotools_open_libvulkan returned null (see hook_impl in logcat)");
++        return volkInitialize();
++    }
++
++    auto vkGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
++        dlsym(handle, "vkGetInstanceProcAddr"));
++    if (!vkGetInstanceProcAddr) {
++        RexWriteDriverBootOutcome("custom_failed", driver_name.c_str(),
++                                  "vkGetInstanceProcAddr missing from loader");
++        return volkInitialize();
++    }
++
++    volkInitializeCustom(vkGetInstanceProcAddr);
++    RexWriteDriverBootOutcome("custom_ok", driver_name.c_str(), "-");
++    return VK_SUCCESS;
++}
++
++}  // namespace
++}  // namespace plume
++#endif  // __ANDROID__
++
+ // TODO:
+ // - Fix resource pools.
+ 
+@@ -2195,15 +2307,50 @@ namespace plume {
+         mailboxPresentModeSupported = std::find(presentModes.begin(), presentModes.end(), VK_PRESENT_MODE_MAILBOX_KHR) != presentModes.end();
+ 
+         // Check if the format we requested is part of the supported surface formats.
++        // Android's VK_KHR_android_surface only guarantees VK_FORMAT_R8G8B8A8_UNORM;
++        // BGRA8 / float formats are optional and frequently absent (e.g. Adreno
++        // 642L). Fall back through the common swapchain candidates instead of
++        // failing outright, then accept whatever the surface offers.
+         std::vector<VkSurfaceFormatKHR> compatibleSurfaceFormats;
+         VkFormat requestedFormat = toVk(desc.format);
+-        for (uint32_t i = 0; i < surfaceFormatCount; i++) {
+-            if (surfaceFormats[i].format == requestedFormat) {
+-                compatibleSurfaceFormats.emplace_back(surfaceFormats[i]);
++        const VkFormat formatCandidates[] = {
++            requestedFormat,
++            VK_FORMAT_B8G8R8A8_UNORM,
++            VK_FORMAT_B8G8R8A8_SRGB,
++            VK_FORMAT_R8G8B8A8_UNORM,
++            VK_FORMAT_R8G8B8A8_SRGB,
++            VK_FORMAT_R16G16B16A16_SFLOAT,
++        };
++        for (VkFormat candidate : formatCandidates) {
++            for (uint32_t i = 0; i < surfaceFormatCount; i++) {
++                if (surfaceFormats[i].format == candidate) {
++                    compatibleSurfaceFormats.emplace_back(surfaceFormats[i]);
++                    break;
++                }
++            }
++            if (!compatibleSurfaceFormats.empty()) {
+                 break;
+             }
+         }
+ 
++        if (compatibleSurfaceFormats.empty() && surfaceFormatCount > 0) {
++            // Nothing we know about — prefer the sRGB-nonlinear color space if
++            // present, else take the first format the surface reports. The
++            // Vulkan swapchain is still channel-correct by name, only tonal
++            // expectations may shift.
++            for (uint32_t i = 0; i < surfaceFormatCount; i++) {
++                if (surfaceFormats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
++                    compatibleSurfaceFormats.emplace_back(surfaceFormats[i]);
++                    break;
++                }
++            }
++            if (compatibleSurfaceFormats.empty()) {
++                compatibleSurfaceFormats.emplace_back(surfaceFormats[0]);
++            }
++            fprintf(stderr, "plume: requested surface format %d unavailable, falling back to %d.\n",
++                    (int)requestedFormat, (int)compatibleSurfaceFormats.front().format);
++        }
++
+         if (compatibleSurfaceFormats.empty()) {
+             fprintf(stderr, "No compatible surface formats were found.\n");
+             return;
+@@ -2704,7 +2851,7 @@ namespace plume {
+     }
+ 
+     void VulkanQueryPool::queryResults() {
+-	    VkResult res = vkGetQueryPoolResults(device->vk, vk, 0, uint32_t(results.size()), sizeof(uint64_t) * results.size(), results.data(), sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
++            VkResult res = vkGetQueryPoolResults(device->vk, vk, 0, uint32_t(results.size()), sizeof(uint64_t) * results.size(), results.data(), sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
+         if (res != VK_SUCCESS) {
+             fprintf(stderr, "vkGetQueryPoolResults failed with error code 0x%X.\n", res);
+             return;
+@@ -4464,7 +4611,14 @@ namespace plume {
+ #else
+     VulkanInterface::VulkanInterface() {
+ #endif
++#if defined(__ANDROID__)
++        // Custom Adreno driver (libadrenotools) when the app activated one;
++        // falls back to the system loader otherwise. See the note at the top
++        // of this file.
++        VkResult res = RexAdrenotoolsVolkInitialize();
++#else
+         VkResult res = volkInitialize();
++#endif
+         if (res != VK_SUCCESS) {
+             fprintf(stderr, "volkInitialize failed with error code 0x%X.\n", res);
+             return;

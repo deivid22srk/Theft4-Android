@@ -227,12 +227,17 @@
       "path": "thirdparty/plume",
       "base_revision": "519e3258048fe0bc65044e75fba7b1543e4c8e90",
       "patch": "plume-ps4.patch",
-      "sha256": "3d6e628a3866efad961a338d6815894f02083d346b6cd9e45ba6fa74381f464f",
+      "sha256": "a398da2ed85eceaadb4a63090c2711a9e766701fb278f26ba16cf623a7941ceb",
       "files": [
         {
           "path": "plume_render_interface_types.h",
           "before_sha256": "9ff137103bbfa63c66f1f23a926f7efad6aaebbafb0554df9966e1978246d17b",
           "after_sha256": "8709977ca35d01042d2f6f9616b1cb167fb8fe8be18b5f10e6ec6a010437ab02"
+        },
+        {
+          "path": "plume_vulkan.cpp",
+          "before_sha256": "70ecc88658c7231497836d15ea9f98d80861a6e991cc6128d40c7ac980193038",
+          "after_sha256": "ec8c840b283b451e24d971285bcad33ef0216a940f24696766d9112b32c42767"
         }
       ]
     },
