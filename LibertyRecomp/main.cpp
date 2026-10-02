@@ -122,15 +122,19 @@ static std::array<std::string_view, 3> g_D3D12RequiredModules =
 };
 #endif
 
-// On Android, SDL3 runs the native entry point through SDLActivity.nativeRunMain,
-// which invokes SDL_main() rather than main(). Including <SDL3/SDL_main.h> in the
-// translation unit that defines main() aliases `main` → `SDL_main` at preprocess
-// time, so the existing main() body below gets picked up correctly. On desktop
-// this header is also a no-op unless SDL_MAIN_HANDLED is NOT defined; we leave
-// it Android-only to avoid perturbing the other platforms.
-#if defined(__ANDROID__)
-#include <SDL3/SDL_main.h>
-#endif
+// On Android, SDL3 launches the game through SDLActivity.nativeRunMain(), which
+// SDL_LoadFunction()s the C symbol "SDL_main" out of libLibertyRecomp.so and
+// calls it on the SDL thread. This project compiles with SDL_MAIN_HANDLED (see
+// LibertyRecomp/CMakeLists.txt add_compile_definitions), which suppresses
+// <SDL3/SDL_main.h>'s main→SDL_main aliasing in every translation unit — the
+// .so would then only export plain `main`, and SDLActivity fails on device
+// with "nativeRunMain(): Couldn't find function SDL_main" (the activity exits
+// silently as soon as Play is pressed).
+// Rather than un-defining SDL_MAIN_HANDLED globally — which would rename every
+// token `main` in every TU that pulls in SDL headers — the entry point below is
+// simply compiled under its Android-facing name. This matches SDL3's documented
+// Android contract: "SDL_main.h ... export an `SDL_main()` function (to be
+// called from Java)", with zero side effects on the other platforms.
 
 const size_t XMAIOBegin = 0x7FEA0000;
 const size_t XMAIOEnd = XMAIOBegin + 0x0000FFFF;
@@ -481,7 +485,14 @@ static void LibertyOnXboxAchievementUnlocked(uint32_t xbox_id)
 #endif
 }
 
+#if defined(__ANDROID__)
+// SDL3/Android entry point: SDLActivity.nativeRunMain() looks up "SDL_main"
+// by name via dlsym, so it must be an unmangled C symbol with default visibility.
+extern "C" __attribute__((visibility("default"))) int
+SDL_main(int argc, char *argv[])
+#else
 int main(int argc, char *argv[])
+#endif
 {
     bool forceInstaller = false;
     bool forceDLCInstaller = false;
