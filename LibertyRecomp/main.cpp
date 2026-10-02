@@ -14,12 +14,30 @@
 #endif
 #ifdef __ANDROID__
 #include <dlfcn.h>
+#include <android/log.h>
+#include <pthread.h>
+#include <unistd.h>
 #endif
 #if REX_PLATFORM_CONSOLE
 #include <unistd.h>
 #endif
 #ifndef _WIN32
 #include <signal.h>
+#endif
+
+#if defined(__ANDROID__)
+// ── Android logcat helpers ──────────────────────────────────────────────
+// Direct __android_log_print writes for events that MUST be observable:
+// fatal exit paths (which would otherwise race the stdio bridge thread) and
+// coarse init milestones. Everything else (printf/fprintf/DIAG_EMIT) reaches
+// logcat through the stdout/stderr bridge installed at the top of SDL_main.
+#define LIBERTY_ANDROID_FATAL(...) \
+    __android_log_print(ANDROID_LOG_ERROR, "LibertyRecomp", __VA_ARGS__)
+#define LIBERTY_ANDROID_LOGI(...) \
+    __android_log_print(ANDROID_LOG_INFO, "LibertyRecomp", __VA_ARGS__)
+#else
+#define LIBERTY_ANDROID_FATAL(...) do {} while (0)
+#define LIBERTY_ANDROID_LOGI(...)  do {} while (0)
 #endif
 #include <cpu/guest_thread.h>
 #include <gpu/video.h>
@@ -273,6 +291,7 @@ static void ShowVideoBackendErrorAndExit()
     {
         fprintf(stderr, "[Main] Video backend initialization failed (no window available for message box).\n");
         fflush(stderr);
+        LIBERTY_ANDROID_FATAL("[FATAL] Video backend initialization failed (no window available for message box)");
     }
     DIAG_EMIT("[EXIT-TRACE] main.cpp:203 calling _Exit\n");
     std::_Exit(1);
@@ -486,6 +505,60 @@ static void LibertyOnXboxAchievementUnlocked(uint32_t xbox_id)
 }
 
 #if defined(__ANDROID__)
+// ── stdout/stderr → logcat bridge ───────────────────────────────────────────
+// A non-debuggable release app has both streams routed to /dev/null, so every
+// printf/fprintf-based diagnostic in the recomp (including DIAG_EMIT, which
+// writes to stderr) is lost. Redirect both streams into a pipe and forward
+// each line to logcat from a worker thread.
+static void* LibertyStdioLogThread(void* arg)
+{
+    const int fd = static_cast<int>(reinterpret_cast<intptr_t>(arg));
+    std::string pending;
+    char buf[4096];
+    ssize_t n;
+    while ((n = read(fd, buf, sizeof(buf))) > 0) {
+        size_t start = 0;
+        for (ssize_t i = 0; i < n; ++i) {
+            if (buf[i] != '\n') continue;
+            pending.append(buf + start, static_cast<size_t>(i - start));
+            if (!pending.empty())
+                __android_log_print(ANDROID_LOG_INFO, "LibertyStdio", "%s", pending.c_str());
+            pending.clear();
+            start = static_cast<size_t>(i) + 1;
+        }
+        pending.append(buf + start, static_cast<size_t>(n - start));
+        // Flush oversized partial lines so the pipe never wedges.
+        while (pending.size() > 3800) {
+            __android_log_print(ANDROID_LOG_INFO, "LibertyStdio", "%s",
+                                pending.substr(0, 3800).c_str());
+            pending.erase(0, 3800);
+        }
+    }
+    return nullptr;
+}
+
+static void InstallStdioLogcatBridge()
+{
+    int fds[2];
+    if (pipe(fds) != 0) return;
+    fflush(stdout);
+    fflush(stderr);
+    dup2(fds[1], fileno(stdout));
+    dup2(fds[1], fileno(stderr));
+    close(fds[1]);
+    // Pipes make C stdio fully buffered by default — force unbuffered so
+    // messages reach logcat immediately instead of sitting in the FILE buffer.
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+    pthread_t tid;
+    if (pthread_create(&tid, nullptr, LibertyStdioLogThread,
+                       reinterpret_cast<void*>(static_cast<intptr_t>(fds[0]))) == 0) {
+        pthread_detach(tid);
+    }
+}
+#endif // __ANDROID__
+
+#if defined(__ANDROID__)
 // SDL3/Android entry point: SDLActivity.nativeRunMain() looks up "SDL_main"
 // by name via dlsym, so it must be an unmangled C symbol with default visibility.
 extern "C" __attribute__((visibility("default"))) int
@@ -494,12 +567,25 @@ SDL_main(int argc, char *argv[])
 int main(int argc, char *argv[])
 #endif
 {
+#if defined(__ANDROID__)
+    LIBERTY_ANDROID_LOGI("[Main] SDL_main entered (argc=%d) — installing stdio→logcat bridge", argc);
+    InstallStdioLogcatBridge();
+#endif
     bool forceInstaller = false;
     bool forceDLCInstaller = false;
     bool useDefaultWorkingDirectory = false;
     bool forceInstallationCheck = false;
     bool graphicsApiRetry = false;
+#if defined(__ANDROID__)
+    // Logcat visibility: the Android app cannot pass --diagnostics on its
+    // (nonexistent) command line, and a non-debuggable release build sends
+    // stdout/stderr to /dev/null — without this default a failed boot dies
+    // with zero observable output. Diagnostics stay launch-immutable; on
+    // Android the launch decision is simply "always on".
+    bool diagnostics = true;
+#else
     bool diagnostics = false;
+#endif
     const char *sdlVideoDriver = nullptr;
     std::string sdlVideoDriverStr;
     std::string diagnosticsCategories;
@@ -621,6 +707,7 @@ int main(int argc, char *argv[])
     if (!EmbeddedAssets::EnsureIsoPayload()) {
         printf("[Main] FATAL: Failed to stage default.xex from the selected ISO\n");
         fflush(stdout);
+        LIBERTY_ANDROID_FATAL("[FATAL] Failed to stage default.xex from the selected ISO (details above under LibertyStdio)");
         std::_Exit(1);
     }
 #endif
@@ -833,7 +920,9 @@ int main(int argc, char *argv[])
         image_info.image_base = static_cast<u32>(PPC_IMAGE_BASE);
         image_info.image_size = static_cast<u32>(PPC_IMAGE_SIZE);
         image_info.func_mappings = PPCFuncMappings;
+        LIBERTY_ANDROID_LOGI("[Main] Calling rex::Runtime::Setup() (VFS mount + XEX load + kernel init)...");
         uint32_t rt_status = s_rexRuntime->Setup(image_info, std::move(rexConfig));
+        LIBERTY_ANDROID_LOGI("[Main] rex::Runtime::Setup() returned 0x%08X", rt_status);
         DIAG_EMIT("[Main] Setup() returned 0x%08X\n", rt_status);
 
         // Xbox 360 timebase = exactly 50 MHz. Must be explicit because Liberty
@@ -844,6 +933,7 @@ int main(int argc, char *argv[])
 
         if (rt_status != 0 /* X_STATUS_SUCCESS */) {
             fprintf(stderr, "[Main] FATAL: rex::Runtime::Setup() failed with 0x%08X\n", rt_status);
+            LIBERTY_ANDROID_FATAL("[FATAL] rex::Runtime::Setup() failed with 0x%08X", rt_status);
             DIAG_EMIT("[EXIT-TRACE] main.cpp:478 calling _Exit\n");
             std::_Exit(1);
         }
@@ -860,6 +950,7 @@ int main(int argc, char *argv[])
         if (!rex::kernel::crt::InitHeap(REXCVAR_GET(rexcrt_heap_size_mb),
                                         s_rexRuntime->memory())) {
             fprintf(stderr, "[Main] FATAL: rexcrt heap init failed\n");
+            LIBERTY_ANDROID_FATAL("[FATAL] rexcrt heap init failed");
             std::_Exit(1);
         }
         // DIAG: verify xstart is registered after Setup(). This is subordinate
@@ -1066,6 +1157,7 @@ int main(int argc, char *argv[])
                 if (!EmbeddedAssets::ExtractObbIfNeeded(obbFile, destPath)) {
                     printf("[Main] FATAL: Failed to extract OBB payload\n");
                     fflush(stdout);
+                    LIBERTY_ANDROID_FATAL("[FATAL] Failed to extract OBB payload");
                     std::_Exit(1);
                 }
             }
@@ -1077,6 +1169,8 @@ int main(int argc, char *argv[])
         printf("[Main] FATAL: Embedded game XEX not found at %s\n",
                modulePath.string().c_str());
         fflush(stdout);
+        LIBERTY_ANDROID_FATAL("[FATAL] Embedded game XEX not found at %s",
+                              modulePath.string().c_str());
         std::_Exit(1);
     }
     DIAG_EMIT("[Main] Embedded build — game root: %s\n",

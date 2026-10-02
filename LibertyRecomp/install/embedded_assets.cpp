@@ -22,6 +22,15 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <errno.h>
+#include <android/log.h>
+
+// Failure paths here are followed by std::_Exit(1) in main.cpp — the stdio
+// bridge thread would race the process teardown, so these go straight to
+// logcat instead of stderr.
+#define LIBERTY_ASSETS_ALOGE(...) \
+    __android_log_print(ANDROID_LOG_ERROR, "LibertyRecomp", __VA_ARGS__)
+#define LIBERTY_ASSETS_ALOGI(...) \
+    __android_log_print(ANDROID_LOG_INFO, "LibertyRecomp", __VA_ARGS__)
 // miniz with full archive API support.
 // The SDL3-vendored copy disables archive APIs, and the smol-v copy's .h
 // defines MINIZ_HEADER_FILE_ONLY.  Include the .c which has both decls+impl
@@ -183,6 +192,8 @@ bool EmbeddedAssets::EnsureIsoPayload()
     if (isoPath.empty())
         return true; // Folder/OBB delivery — nothing to stage.
 
+    LIBERTY_ASSETS_ALOGI("[EmbeddedAssets] Staging ISO payload from: %s", isoPath.string().c_str());
+
     std::error_code ec;
     std::filesystem::path gameRoot = GetGameRoot();
     std::filesystem::create_directories(gameRoot, ec);
@@ -196,8 +207,10 @@ bool EmbeddedAssets::EnsureIsoPayload()
         fprintf(stderr, "[EmbeddedAssets] ISO not readable: %s\n",
                 isoPath.string().c_str());
         fflush(stderr);
+        LIBERTY_ASSETS_ALOGE("[EmbeddedAssets] ISO not readable: %s", isoPath.string().c_str());
         return false;
     }
+    LIBERTY_ASSETS_ALOGI("[EmbeddedAssets] ISO size: %llu bytes", (unsigned long long)isoSize);
 
     // Fast path: the same ISO (path + size fingerprint) was already staged.
     if (std::filesystem::exists(xexPath, ec)) {
@@ -219,12 +232,14 @@ bool EmbeddedAssets::EnsureIsoPayload()
         fprintf(stderr, "[EmbeddedAssets] Not a valid Xbox 360 disc image: %s\n",
                 isoPath.string().c_str());
         fflush(stderr);
+        LIBERTY_ASSETS_ALOGE("[EmbeddedAssets] Not a valid Xbox 360 disc image: %s", isoPath.string().c_str());
         return false;
     }
     if (!isoFs->exists("default.xex")) {
         fprintf(stderr, "[EmbeddedAssets] ISO root has no default.xex — "
                         "is %s a GTA IV disc?\n", isoPath.string().c_str());
         fflush(stderr);
+        LIBERTY_ASSETS_ALOGE("[EmbeddedAssets] ISO root has no default.xex — is this a GTA IV disc? (%s)", isoPath.string().c_str());
         return false;
     }
 
@@ -232,8 +247,10 @@ bool EmbeddedAssets::EnsureIsoPayload()
     if (!isoFs->load("default.xex", xex) || xex.empty()) {
         fprintf(stderr, "[EmbeddedAssets] Failed to read default.xex from ISO\n");
         fflush(stderr);
+        LIBERTY_ASSETS_ALOGE("[EmbeddedAssets] Failed to read default.xex from ISO");
         return false;
     }
+    LIBERTY_ASSETS_ALOGI("[EmbeddedAssets] default.xex read from ISO: %zu bytes", xex.size());
 
     // Stage default.xex for the host-side XEX loader (LdrLoadModule reads it
     // via std::filesystem). Write to a temp file, fsync, then rename.
@@ -244,6 +261,7 @@ bool EmbeddedAssets::EnsureIsoPayload()
     if (fd < 0) {
         fprintf(stderr, "[EmbeddedAssets] Cannot write %s\n", tmpPath.string().c_str());
         fflush(stderr);
+        LIBERTY_ASSETS_ALOGE("[EmbeddedAssets] Cannot write %s (errno=%d)", tmpPath.string().c_str(), errno);
         return false;
     }
     size_t off = 0;
@@ -264,6 +282,7 @@ bool EmbeddedAssets::EnsureIsoPayload()
         fprintf(stderr, "[EmbeddedAssets] Rename of staged xex failed: %s\n",
                 ec.message().c_str());
         fflush(stderr);
+        LIBERTY_ASSETS_ALOGE("[EmbeddedAssets] Rename of staged xex failed: %s", ec.message().c_str());
         return false;
     }
 
@@ -278,6 +297,7 @@ bool EmbeddedAssets::EnsureIsoPayload()
     printf("[EmbeddedAssets] Staged default.xex (%zu bytes) from ISO %s — "
            "disc content mounts in place\n", xex.size(), isoPath.string().c_str());
     fflush(stdout);
+    LIBERTY_ASSETS_ALOGI("[EmbeddedAssets] Staged default.xex (%zu bytes) from ISO — disc content mounts in place", xex.size());
     return true;
 #else
     return true;

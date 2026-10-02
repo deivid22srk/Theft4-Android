@@ -17,6 +17,19 @@ void os::logger::Init()
 {
     if (!rex::diagnostics::IsEnabled(
             rex::diagnostics::Category::kLogging)) return;
+
+    // Configure rexglue's spdlog logging (this evicts InitLoggingEarly()'s
+    // stdout sink, which is invisible on Android). log_to_console=false and
+    // app_name left empty on purpose: no stdout and no file sinks here —
+    // logcat is the only channel, registered by PlatformInitSinks() below.
+    rex::LogConfig cfg;
+    cfg.log_to_console = false;
+    cfg.default_level  = spdlog::level::debug;
+    cfg.flush_level    = spdlog::level::info;
+    rex::InitLogging(cfg);
+
+    PlatformInitSinks();
+
     __android_log_print(ANDROID_LOG_INFO, LIBERTY_LOG_TAG,
         "LibertyRecomp logger initialized (logcat)");
 }
@@ -25,7 +38,6 @@ void os::logger::PlatformInitSinks()
 {
     if (!rex::diagnostics::IsEnabled(
             rex::diagnostics::Category::kLogging)) return;
-    Init();
     auto sink = std::make_shared<spdlog::sinks::android_sink_mt>(LIBERTY_LOG_TAG);
     rex::AddSink(sink);
 }
