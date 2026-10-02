@@ -37,6 +37,22 @@
 #include <string_view>
 #include <unordered_map>
 
+// Xenon db16cyc is a processor delay hint used by guest spin-wait loops.
+// Keep this entirely in userspace: an OS scheduler yield here is far too
+// expensive and changes the timing of tight synchronization paths.
+// NOTE (build-1.0 regen 2026-10): the rexglue 0.9.0 codegen emits REX_DB16CYC()
+// call sites but not this definition — the original team carried it as a
+// manual patch on the generated header. Re-added after the regeneration;
+// re-apply this block whenever gta4_init.h is regenerated.
+#if defined(__aarch64__) && (defined(__clang__) || defined(__GNUC__))
+#define REX_DB16CYC() __asm__ volatile("yield")
+#elif (defined(__x86_64__) || defined(__i386__)) && \
+    (defined(__clang__) || defined(__GNUC__))
+#define REX_DB16CYC() __asm__ volatile("pause")
+#else
+#define REX_DB16CYC() ((void)0)
+#endif
+
 //=============================================================================
 // Image Info
 //=============================================================================
