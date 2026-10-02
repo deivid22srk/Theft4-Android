@@ -46,6 +46,11 @@ android {
                     "-DLIBERTY_RECOMP_ANDROID_RUNTIME_ASSETS=ON",
                     "-DANDROID_STL=c++_static",
                     "-DANDROID_PLATFORM=android-26",
+                    // Keep rexcore a static archive: as an OBJECT library its
+                    // objects get folded into libLibertyRecompLib.a, and the
+                    // whole-archive link of that library then duplicates every
+                    // rexcore symbol against the direct objects.
+                    "-DREXCORE_LIBRARY_TYPE=STATIC",
                     "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
                 )
                 targets += "LibertyRecomp"

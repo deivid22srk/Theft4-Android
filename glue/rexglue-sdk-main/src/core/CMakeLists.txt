@@ -1,7 +1,13 @@
 # rexcore - Core utilities library
 # Foundation types, data structures, and threading primitives
 
-set(REXCORE_LIBRARY_TYPE OBJECT)
+# OBJECT by default so the SDK's own consumers receive the objects directly.
+# Consumers may force STATIC (the Android game build does) to keep the object
+# files from being folded into intermediate static archives that are later
+# whole-archive linked, which would duplicate every rexcore symbol.
+if(NOT DEFINED REXCORE_LIBRARY_TYPE)
+    set(REXCORE_LIBRARY_TYPE OBJECT)
+endif()
 if(REXGLUE_CORE_ONLY)
     set(REXCORE_LIBRARY_TYPE STATIC)
 endif()
