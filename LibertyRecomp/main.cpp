@@ -971,15 +971,15 @@ int main(int argc, char *argv[])
         // to the immutable command-line logging category.
         if (::os::diag::ShouldEmit()) {
             auto* p = s_rexRuntime->function_dispatcher();
-            PPCFunc* xsf = p->GetFunction(0x82A11290);
-            fprintf(stderr, "[DIAG] After Setup(): GetFunction(0x82A11290)=%p  HasFT=%d\n",
+            PPCFunc* xsf = p->GetFunction(0x829A0860);
+            fprintf(stderr, "[DIAG] After Setup(): GetFunction(0x829A0860)=%p  HasFT=%d\n",
                     (void*)xsf, (int)p->HasAnyFunctionTable());
             int total = 0, nullHost = 0;
             bool foundEntry = false;
             for (int i = 0; PPCFuncMappings[i].guest != 0; ++i) {
                 total++;
                 if (PPCFuncMappings[i].host == nullptr) nullHost++;
-                if (PPCFuncMappings[i].guest == 0x82A11290) {
+                if (PPCFuncMappings[i].guest == 0x829A0860) {
                     fprintf(stderr, "[DIAG] PPCFuncMappings[%d] = { 0x%zX, %p } (xstart)\n",
                             i, PPCFuncMappings[i].guest, (void*)PPCFuncMappings[i].host);
                     foundEntry = true;
@@ -1436,20 +1436,19 @@ int main(int argc, char *argv[])
     // DIAG: verify xstart is still registered right before LaunchModule
     if (::os::diag::ShouldEmit()) {
         auto* p = rt->function_dispatcher();
-        PPCFunc* xsf = p->GetFunction(0x82A11290);
-        fprintf(stderr, "[DIAG] Before LaunchModule(): GetFunction(0x82A11290)=%p  HasFT=%d  instance=%p\n",
+        PPCFunc* xsf = p->GetFunction(0x829A0860);
+        fprintf(stderr, "[DIAG] Before LaunchModule(): GetFunction(0x829A0860)=%p  HasFT=%d  instance=%p\n",
                 (void*)xsf, (int)p->HasAnyFunctionTable(), (void*)rt);
         fflush(stderr);
     }
     // ------------------------------------------------------------------
     // Launch entry resolution (run5 TvpL5PVd): the XEX inside the user's
     // ISO may be a DIFFERENT build from the XEX the recomp was generated
-    // against. The loaded ISO XEX's header entry point (0x829A0860 on the
-    // reported ISO) is not a function start in the recomp function table -
-    // which only contains the generator's own entry, the CRT startup
-    // "xstart" @ 0x82A11290 (import calls are resolved at recomp time, so
-    // the loaded XEX's code is never dispatched - only its entry point
-    // was). Prefer the XEX entry when it IS registered (matching builds);
+    // against. The recomp function table only contains functions from the
+    // generator's own build; its entry is the CRT startup "xstart"
+    // (0x829A0860 for the build-1.0 regeneration from the user's ISO).
+    // Prefer the XEX entry when it IS registered (matching builds - the
+    // normal path now that the recomp was regenerated from this ISO);
     // otherwise launch at xstart instead of dying with "No function
     // registered" and a 5s watchdog stall.
     // ------------------------------------------------------------------
@@ -1467,11 +1466,66 @@ int main(int argc, char *argv[])
         fprintf(stderr, "[Main] Launch entry: XEX entry %08X is registered - launching there\n",
                 launch_entry);
     } else {
-        launch_entry = 0x82A11290;  // xstart - recomp CRT startup
+        launch_entry = 0x829A0860;  // xstart - recomp CRT startup
         fprintf(stderr,
                 "[Main] Launch entry: XEX entry %08X has NO recompiled function "
-                "(XEX build differs from recomp source) - falling back to xstart @ %08X\n",
+                "(XEX build differs from recomp source) - falling back to xstart @ %08X\n"
+                "[Main] WARNING: ISO XEX data sections differ from the generator build; "
+                "CRT static locks are re-initialized at boot and self-heal on first use "
+                "(see RtlEnterCriticalSection repair)\n",
                 xex_entry, launch_entry);
+
+        // --------------------------------------------------------------
+        // CRT exit-list lock repair (run 2ADt5LP5 black screen: main guest
+        // thread frozen at lr=0x82A18640 r3=0x82B1F728 for 112 watchdog
+        // ticks).
+        //
+        // The ISO XEX build differs from the recomp source, and rexglue's
+        // LoadXexImage still applies the ISO's data sections over the image.
+        // The generator's CRT expects ITS OWN pre-initialized exit-list
+        // critical section at 0x82B1F728; with the other build's bytes
+        // there, the first RtlEnterCriticalSection (sub_82A18620, called by
+        // xstart before anything else) sees lock_count != -1 with no owner
+        // and waits forever -> black screen with a frozen main thread.
+        //
+        // Re-initialize the CS and the empty-list sentinel so the
+        // generator's CODE sees generator-consistent DATA. Only runs on the
+        // mismatch path; matching builds keep their own (identical) static
+        // values. The runtime counterpart in RtlEnterCriticalSection_entry
+        // self-heals any OTHER static lock the same corruption may hit.
+        // --------------------------------------------------------------
+        {
+            constexpr uint32_t kCrtExitLockCS = 0x82B1F728;              // X_RTL_CRITICAL_SECTION (28 bytes)
+            constexpr uint32_t kCrtExitListHead = kCrtExitLockCS + 0x1C; // r30 sentinel in sub_82A18620
+            uint8_t* mem = g_memory.base;
+            auto rd32 = [&](uint32_t ea) -> uint32_t {
+                uint32_t v;
+                std::memcpy(&v, mem + ea, 4);
+                return __builtin_bswap32(v);
+            };
+            uint32_t found_type = mem[kCrtExitLockCS + 0x00];
+            uint32_t found_lock = rd32(kCrtExitLockCS + 0x10);
+            uint32_t found_owner = rd32(kCrtExitLockCS + 0x18);
+            uint32_t found_head = rd32(kCrtExitListHead);
+            // X_RTL_CRITICAL_SECTION init, mirroring xeRtlInitializeCriticalSection:
+            // header.type=1, header.absolute=0, signal_state=0, wait_list=0,
+            // lock_count=-1 (all-ones is endianness-safe), recursion=0, owner=0.
+            mem[kCrtExitLockCS + 0x00] = 1;                     // type: EventSynchronizationObject
+            mem[kCrtExitLockCS + 0x01] = 0;                     // absolute: spin count div 256
+            std::memset(mem + kCrtExitLockCS + 0x02, 0, 0x0E);  // size/signalling/signal_state/wait_list
+            std::memset(mem + kCrtExitLockCS + 0x10, 0xFF, 4);  // lock_count = -1
+            std::memset(mem + kCrtExitLockCS + 0x14, 0x00, 4);  // recursion_count = 0
+            std::memset(mem + kCrtExitLockCS + 0x18, 0x00, 4);  // owning_thread = 0
+            // Empty list: head points to itself (sub_82A18620 loops until
+            // r31 == &head; nodes chain next@+0 -> &head, callback@+8).
+            uint32_t head_be = __builtin_bswap32(kCrtExitListHead);
+            std::memcpy(mem + kCrtExitListHead, &head_be, 4);
+            fprintf(stderr,
+                    "[Main] CRT exit lock %08X repair: found type=%u lock=%08X owner=%08X head=%08X "
+                    "-> re-initialized (ISO XEX build vs recomp source mismatch)\n",
+                    kCrtExitLockCS, found_type, found_lock, found_owner, found_head);
+            fflush(stderr);
+        }
     }
     fflush(stderr);
     auto main_xthread = rt->LaunchModule(launch_entry);

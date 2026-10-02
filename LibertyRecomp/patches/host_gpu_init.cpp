@@ -35,7 +35,7 @@ static constexpr uint32_t ADDR_RENDER_GATE         = 0x82B0B48C;
 static constexpr uint32_t ADDR_GPU_READY_FLAG      = 0x831CF6C0;
 
 // =============================================================================
-// sub_821B3CE8 — grmSetup System Construction
+// sub_8218C600 — grmSetup System Construction
 // =============================================================================
 // Called once during engine boot from sub_82140000 ("GTA NY"). Allocates the
 // 472-byte grmSetup singleton, constructs it via grcSetup ctor, overwrites
@@ -44,10 +44,10 @@ static constexpr uint32_t ADDR_GPU_READY_FLAG      = 0x831CF6C0;
 // After the original completes, the host GPU is already live (created before
 // guest code started), so we set initState=2 (READY) and seed the render gate.
 //
-PPC_FUNC_IMPL(__imp__sub_821B3CE8);
-PPC_FUNC_HOOK(sub_821B3CE8)
+PPC_FUNC_IMPL(__imp__sub_8218C600);
+PPC_FUNC_HOOK(sub_8218C600)
 {
-    __imp__sub_821B3CE8(ctx, base);
+    __imp__sub_8218C600(ctx, base);
 
     uint32_t inst = PPC_LOAD_U32(ADDR_GRM_SETUP_INSTANCE);
     if (inst != 0)

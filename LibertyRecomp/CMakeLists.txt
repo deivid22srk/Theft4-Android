@@ -156,7 +156,7 @@ set(LIBERTY_RECOMP_KERNEL_CXX_SOURCES
                                  #   imports.cpp removal: InitKernelMainThread,
                                  #   KernelPhase_EnterRuntime, sub_821966D0_hook,
                                  #   XamNotifyEnqueueEvent
-    "kernel/lod_hooks.cpp"       # LOD rendering distance tuning
+# [build-1.0: v8 addresses] "kernel/lod_hooks.cpp"       # LOD rendering distance tuning
     "kernel/button_prompts.cpp"  # input UI (button prompt glyphs)
     # Removed: io/texture_convert — no external callers
 )
@@ -343,29 +343,29 @@ endif()
 
 set(LIBERTY_RECOMP_PATCHES_CXX_SOURCES
     # Input (GTA IV keyboard/mouse remapping moved to the active RexGlue target.)
-    "patches/gta4_motion_patches.cpp"        # GTA IV motion (PlayStation gyro/accel)
-    "patches/gta4_ds4_patches.cpp"           # DualShock 4/DualSense features
+# [build-1.0: v8 addresses] "patches/gta4_motion_patches.cpp"        # GTA IV motion (PlayStation gyro/accel)
+# [build-1.0: v8 addresses] "patches/gta4_ds4_patches.cpp"           # DualShock 4/DualSense features
 
     # High-frame-rate corrections verified against GTA IV Xbox 360 PPC
-    "patches/gta4_fps_camera_shake_fix.cpp"
-    "patches/gta4_fps_drunk_steering_fix.cpp"
-    "patches/gta4_fps_helicopter_fix.cpp"
-    "patches/gta4_fps_ladder_fix.cpp"
-    "patches/gta4_fps_loading_ui_fix.cpp"
-    "patches/gta4_fps_pathfinding_fix.cpp"
-    "patches/gta4_fps_physics_fix.cpp"
-    "patches/gta4_fps_police_blip_fix.cpp"
-    "patches/gta4_fps_vehicle_camera_fix.cpp"
-    "patches/gta4_fps_water_force_fix.cpp"
-    "patches/gta4_fps_water_particle_fix.cpp"
+# [build-1.0: v8 addresses] "patches/gta4_fps_camera_shake_fix.cpp"
+# [build-1.0: v8 addresses] "patches/gta4_fps_drunk_steering_fix.cpp"
+# [build-1.0: v8 addresses] "patches/gta4_fps_helicopter_fix.cpp"
+# [build-1.0: v8 addresses] "patches/gta4_fps_ladder_fix.cpp"
+# [build-1.0: v8 addresses] "patches/gta4_fps_loading_ui_fix.cpp"
+# [build-1.0: v8 addresses] "patches/gta4_fps_pathfinding_fix.cpp"
+# [build-1.0: v8 addresses] "patches/gta4_fps_physics_fix.cpp"
+# [build-1.0: v8 addresses] "patches/gta4_fps_police_blip_fix.cpp"
+# [build-1.0: v8 addresses] "patches/gta4_fps_vehicle_camera_fix.cpp"
+# [build-1.0: v8 addresses] "patches/gta4_fps_water_force_fix.cpp"
+# [build-1.0: v8 addresses] "patches/gta4_fps_water_particle_fix.cpp"
 
     # Rendering
     "patches/gta4_aspect_ratio_patches.cpp"
-    "patches/postfx_hooks.cpp"               # PostFX (bloom, sun shafts)
-    "patches/shader_collection_patches.cpp"  # fiCollection shader VFS mount chain
+# [build-1.0: v8 addresses] "patches/postfx_hooks.cpp"               # PostFX (bloom, sun shafts)
+# [build-1.0: v8 addresses] "patches/shader_collection_patches.cpp"  # fiCollection shader VFS mount chain
     "patches/host_gpu_init.cpp"              # host device already ready — initState=2, render gate, GPU flag
-    "patches/draw_pool_watchpoint.cpp"       # WATCH: trace lifecycle of *0x831C22A4 (mgr ptr UAF investigation)
-    "patches/createdevice_diag.cpp"          # DIAG: trace CreateDevice gate bail — which of 6 PPC gates returns 0?
+# [build-1.0: v8 addresses] "patches/draw_pool_watchpoint.cpp"       # WATCH: trace lifecycle of *0x831C22A4 (mgr ptr UAF investigation)
+# [build-1.0: v8 addresses] "patches/createdevice_diag.cpp"          # DIAG: trace CreateDevice gate bail — which of 6 PPC gates returns 0?
     # Removed (interfered with rexglue):
     # "patches/grm_setup_patches.cpp"        # old vtable dispatch thunks broke shader factory init
     # "patches/scene_render_patches.cpp"     # duplicate sub_828C1228 hook

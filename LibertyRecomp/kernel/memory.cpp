@@ -12,10 +12,10 @@
 // entries BEFORE rexglue's LoadXexImage, which then overwrote them all
 // when decompressing the PE. Dead stores. rexglue owns vtable loading.
 
-// RMPTFX worker thread hook - suspend during Init to prevent signal_sem accumulation
-// This must be registered via InsertFunction (not PatchFuncMapping) because
-// the thread trampoline uses PPC_CALL_INDIRECT_FUNC which consults PPC_LOOKUP_FUNC
-extern "C" void sub_821966D0_hook(PPCContext &ctx, uint8_t *base);
+// RMPTFX worker thread hook REMOVED for the build-1.0 recomp (user ISO):
+// 0x821966D0 is a LIVE registered function in this build's function table and
+// the old no-op hook would have clobbered it. The v8 registration only made
+// sense when that address had no generated body.
 
 static constexpr size_t AlignDown(size_t value, size_t alignment) noexcept
 {
@@ -73,16 +73,14 @@ void Memory::InitializeFromRexGlue()
     // Shared init: manual stubs, vtable pre-population
     PopulateFunctionTableAndVtables();
 
-    DIAG_EMIT("[DIAG] Post-Populate GetFunction(0x82A692C8)=%p\n",
-              (void*)rex::Runtime::instance()->function_dispatcher()->GetFunction(0x82A692C8));
+    DIAG_EMIT("[DIAG] Post-Populate GetFunction(0x829A0860)=%p\n",
+              (void*)rex::Runtime::instance()->function_dispatcher()->GetFunction(0x829A0860));
 }
 
 void Memory::PopulateFunctionTableAndVtables()
 {
-    // RMPTFX worker thread hook - patches PPC_LOOKUP_FUNC table (used by indirect calls)
-    // PatchFuncMapping only patches PPCFuncMappings[] which is NOT consulted by
-    // PPC_CALL_INDIRECT_FUNC in thread trampolines (sub_827DAE40)
-    InsertFunction(0x821966D0, sub_821966D0_hook);
+    // (build-1.0) no manual function registrations: every address-taken guest
+    // function is already covered by the regenerated function table.
 
     // REMOVED: 5 force-success PPC_FUNC stubs (0x829FBE38, 0x830F2CB8, 0x82AE5F34,
     //   0x82AE5EBC, 0x82AE5F1C). These were fake-success callbacks for 144+

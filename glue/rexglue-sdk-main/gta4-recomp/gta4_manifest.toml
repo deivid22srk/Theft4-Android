@@ -3,6 +3,6 @@ name = "gta4"
 sdk_version = "0.9.0"
 
 [entrypoint]
-file_path = "assets/default_v8.xex"
+file_path = "assets/default.xex"  # [USER ISO BUILD 1.0] entry 0x829A0860 (deivid22srk/Gta4Xboxfiles)
 out_directory_path = "generated"
 includes = ["gta4_config.toml"]

@@ -88,7 +88,4 @@ set(GENERATED_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/gta4_recomp.78.cpp
     ${CMAKE_CURRENT_LIST_DIR}/gta4_recomp.79.cpp
     ${CMAKE_CURRENT_LIST_DIR}/gta4_recomp.80.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/gta4_recomp.81.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/gta4_recomp.82.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/gta4_recomp.83.cpp
 )

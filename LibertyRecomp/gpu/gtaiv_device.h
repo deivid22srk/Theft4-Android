@@ -5,18 +5,18 @@
 
 // =============================================================================
 // GTA IV grcDeviceDx Context Structure (22400 / 0x5780 bytes)
-// Decompiled from sub_82A50890 (CreateDevice) and its 18 callees.
+// Decompiled from sub_829DF440 (CreateDevice) and its 18 callees.
 // All offsets are byte offsets from the device pointer at 0x831C22A4.
 // =============================================================================
 
 namespace GTAIV {
 
-// Device context field offsets (decompiled from sub_82A50890 + callees)
+// Device context field offsets (decompiled from sub_829DF440 + callees)
 namespace DeviceOffset {
     // --- Dirty Flags (5 x uint64_t at +0x00) ---
     constexpr uint32_t DirtyFlags          = 0;       // +0x00: 5 qwords, set to -1 by sub_82A4F7E0/sub_82A3BAA8
 
-    // --- Command Buffer (sub_82A49D08) ---
+    // --- Command Buffer (sub_829D88B8) ---
     constexpr uint32_t CommandBufferPtr    = 48;      // +0x30: Current write position in PM4 buffer
     constexpr uint32_t CommandBufferEnd    = 52;      // +0x34: End of current buffer segment
     constexpr uint32_t CommandBufferLimit  = 56;      // +0x38: Soft limit (flush trigger)
@@ -57,7 +57,7 @@ namespace DeviceOffset {
     constexpr uint32_t BlendOp             = 10772;   // +0x2A14: 16 (D3DBLENDOP_ADD)
     constexpr uint32_t StencilFunc         = 10824;   // +0x2A48: 2
 
-    // --- GPU Control Blocks (sub_82A49D08) ---
+    // --- GPU Control Blocks (sub_829D88B8) ---
     constexpr uint32_t GpuControlBlock     = 10896;   // +0x2A90: 96-byte GPU control block ptr
     constexpr uint32_t GpuIdentifierBlock  = 10900;   // +0x2A94: 32-byte GPU identifier block ptr
     constexpr uint32_t DrawMode            = 10908;   // +0x2A9C: swap interval / draw mode
@@ -109,10 +109,10 @@ namespace DeviceOffset {
     // --- Texture State ---
     constexpr uint32_t TextureSlots        = 12536;   // +0x30F8: 19 texture ptrs
 
-    // --- GPU Resource Tables (sub_82A42020) ---
+    // --- GPU Resource Tables (sub_829D0BD0) ---
     constexpr uint32_t ResourceTableAlloc  = 13764;   // +0x35C4: 0x2000 byte allocation
 
-    // --- Ring Buffer (sub_82A49D08) ---
+    // --- Ring Buffer (sub_829D88B8) ---
     constexpr uint32_t PrimaryRingBufAlloc = 14820;   // +0x39E4: Primary ring buffer alloc
     constexpr uint32_t SecondaryRingBufAlloc=14824;   // +0x39E8: Secondary ring buffer alloc
     constexpr uint32_t RingBufBase         = 14880;   // +0x3A20: Ring buffer base
@@ -123,11 +123,11 @@ namespace DeviceOffset {
     constexpr uint32_t BufferSegmentBase   = 14912;   // +0x3A40: Read pointer
     constexpr uint32_t CmdBufSizeDwords    = 14920;   // +0x3A48: Size in dwords
 
-    // --- Critical Sections (sub_82A50890) ---
+    // --- Critical Sections (sub_829DF440) ---
     constexpr uint32_t CritSection1        = 14928;   // +0x3A50: RTL_CRITICAL_SECTION (28 bytes)
     constexpr uint32_t CritSection2        = 14956;   // +0x3A6C: RTL_CRITICAL_SECTION (28 bytes)
 
-    // --- Timer / Performance (sub_82A50890) ---
+    // --- Timer / Performance (sub_829DF440) ---
     constexpr uint32_t GpuTimerContext     = 16544;   // +0x40A0: GPU timer context
     constexpr uint32_t FrameCounter        = 16544;   // +0x40A0: alias
     constexpr uint32_t FrameSubmitted      = 16548;   // +0x40A4: GPU frame submitted counter
@@ -137,7 +137,7 @@ namespace DeviceOffset {
     constexpr uint32_t PerfCounterAddr2    = 16708;   // +0x4144: Perf counter write addr 2
     constexpr uint32_t SecondaryBufferBase = 16712;   // +0x4148: Secondary buffer base
 
-    // --- Frame IDs (sub_82A50890) ---
+    // --- Frame IDs (sub_829DF440) ---
     constexpr uint32_t PrevFrameId         = 21540;   // +0x5424: init -1
     constexpr uint32_t CurFrameId          = 21544;   // +0x5428: init -1
     constexpr uint32_t GpuTimerResult      = 21556;   // +0x5434: Timer result
@@ -147,16 +147,16 @@ namespace DeviceOffset {
     // --- Movie Handles (sub_82A53058) ---
     constexpr uint32_t MovieHandles        = 21680;   // +0x54B0: 41 x uint32_t, init -1
 
-    // --- Create Flags (sub_82A416B8) ---
+    // --- Create Flags (sub_829D0268) ---
     constexpr uint32_t CreateFlags         = 22280;   // +0x5708: Creation flags from factory
 
-    // --- Display Info (sub_82A503C8 via VdQueryVideoMode) ---
+    // --- Display Info (sub_829DEF78 via VdQueryVideoMode) ---
     constexpr uint32_t DisplayWidth        = 21524;   // +0x5414: a1[5381]
     constexpr uint32_t DisplayHeight       = 21528;   // +0x5418: a1[5382]
     constexpr uint32_t FrameBufferIndex    = 19480;   // +0x4C18: Current backbuffer
 }
 
-// Device struct total size (allocated by sub_82A416B8 via sub_82A412D0)
+// Device struct total size (allocated by sub_829D0268 via sub_82A412D0)
 constexpr uint32_t DeviceStructSize        = 0x5780;  // 22400 bytes
 
 // Global addresses
