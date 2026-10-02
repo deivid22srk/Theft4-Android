@@ -51,9 +51,27 @@
         android:requestLegacyExternalStorage="true"
         android:supportsRtl="true">
 
+        <!-- Launcher: plain Activity that owns storage permission + game
+             folder selection. Hosting the picker inside LibertySDLActivity
+             was impossible (Activity.onCreate() must chain to the framework
+             super before returning — deferring it crashes with
+             SuperNotCalledException), so the picker is its own activity and
+             Play simply starts the SDL one. -->
+        <activity
+            android:name="com.libertyrecomp.LibertyPickerActivity"
+            android:exported="true"
+            android:screenOrientation="sensorLandscape">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
+
         <activity
             android:name="com.libertyrecomp.LibertySDLActivity"
-            android:exported="true"
+            android:exported="false"
             android:launchMode="singleTask"
             android:alwaysRetainTaskState="true"
             android:screenOrientation="sensorLandscape"
@@ -67,12 +85,6 @@
             <meta-data
                 android:name="android.app.lib_name"
                 android:value="LibertyRecomp" />
-
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
-            </intent-filter>
         </activity>
     </application>
 </manifest>

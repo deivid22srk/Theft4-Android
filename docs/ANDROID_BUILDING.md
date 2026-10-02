@@ -10,7 +10,8 @@ recompiled ahead of time — no JIT, no emulator, no game files at build time.
 | Path | Purpose |
 | --- | --- |
 | `os/android/` | Gradle project (single `:app` module) that wraps `libLibertyRecomp.so` in an APK |
-| `os/android/app/src/main/java/com/libertyrecomp/LibertySDLActivity.java` | Hosting activity: game-folder picker, storage permissions, JNI wiring |
+| `os/android/app/src/main/java/com/libertyrecomp/LibertyPickerActivity.java` | Launcher activity: game-folder picker + storage permissions (plain Activity) |
+| `os/android/app/src/main/java/com/libertyrecomp/LibertySDLActivity.java` | SDL hosting activity: JNI wiring, pushes game root to native before SDL_main starts |
 | `LibertyRecomp/os/android/` | JNI glue (`jni_glue.cpp`), logger/media/process/user/vibration backends |
 | `toolchains/android.cmake` | CMake toolchain wrapper (chain-loads the NDK toolchain, forces Vulkan) |
 | `glue/rexglue-sdk-main/` | RexGlue SDK runtime (SDL3, volk, VMA, FFmpeg, glslang, …) |
