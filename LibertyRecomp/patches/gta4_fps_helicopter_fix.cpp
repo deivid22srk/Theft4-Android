@@ -51,7 +51,7 @@ bool GetBlinkPhaseForCall(std::uint32_t returnAddress,
     }
 }
 
-void CorrectBlinkPhase(PPCContext& ctx) noexcept
+void CorrectBlinkPhase(PPCContext& ctx, std::uint8_t* base) noexcept
 {
     std::uint32_t targetPhase = 0;
     if (!GetBlinkPhaseForCall(ctx.lr, targetPhase))
@@ -84,12 +84,12 @@ PPC_FUNC_IMPL(__imp__sub_822AAD38);
 // it only at sub_822AB0B0's four helicopter blinker callsites.
 PPC_FUNC_HOOK(sub_822AAA30)
 {
-    gta4::fps::helicopter::CorrectBlinkPhase(ctx);
+    gta4::fps::helicopter::CorrectBlinkPhase(ctx, base);
     __imp__sub_822AAA30(ctx, base);
 }
 
 PPC_FUNC_HOOK(sub_822AAD38)
 {
-    gta4::fps::helicopter::CorrectBlinkPhase(ctx);
+    gta4::fps::helicopter::CorrectBlinkPhase(ctx, base);
     __imp__sub_822AAD38(ctx, base);
 }
