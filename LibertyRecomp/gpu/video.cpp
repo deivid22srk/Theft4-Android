@@ -447,11 +447,28 @@ static RenderFormat GetBackbufferFormat() {
         // Tone mapping shader handles scRGB vs HDR10 PQ conversion
         return RenderFormat::R16G16B16A16_FLOAT;
     default:
+#if defined(__ANDROID__)
+        // Android: swapchains are only guaranteed to support
+        // VK_FORMAT_R8G8B8A8_UNORM (VK_KHR_android_surface minimum); BGRA8 is
+        // optional and absent on some drivers — Adreno 642L (SD 778G+) reports
+        // only RGBA8 surface formats, so requesting BGRA8 made plume abort
+        // swapchain creation with "No compatible surface formats were found."
+        // Vulkan formats are channel-correct by name, and the whole present
+        // chain (backbuffer texture, intermediary, gamma pipeline, swapchain)
+        // derives from this single value, so RGBA8 renders identically.
+        return RenderFormat::R8G8B8A8_UNORM;
+#else
         return RenderFormat::B8G8R8A8_UNORM;      // SDR
+#endif
     }
 }
 
-static RenderFormat g_backbufferFormat = RenderFormat::B8G8R8A8_UNORM;
+static RenderFormat g_backbufferFormat =
+#if defined(__ANDROID__)
+    RenderFormat::R8G8B8A8_UNORM;   // must match GetBackbufferFormat() above
+#else
+    RenderFormat::B8G8R8A8_UNORM;
+#endif
 
 // Legacy compatibility
 #define BACKBUFFER_FORMAT g_backbufferFormat
