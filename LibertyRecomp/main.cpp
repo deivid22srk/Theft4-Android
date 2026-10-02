@@ -1269,6 +1269,10 @@ int main(int argc, char *argv[])
     // Liberty's header + BSS.  This gives us correct .data/.rdata section
     // initial values that the CRT and game code require.
     // ------------------------------------------------------------------
+    // GPU context GOT entry — the one mandatory patch after the XEX load
+    // (RexGlue may not resolve this specific import, ordinal 446).
+    constexpr uint32_t GOT_GPU_CONTEXT = 0x82000768;
+    constexpr uint32_t GPU_CONTEXT_GLOBAL = 0x83124900;
     {
         auto* rt = rex::Runtime::instance();
 
@@ -1287,10 +1291,78 @@ int main(int argc, char *argv[])
         }
 
         // Unprotect so we can re-apply Liberty's header patches.
+        // NOTE (Android, run4 2vFQk0bg): a single Protect() across the whole
+        // image range fails with "BaseHeap::Protect failed due to request
+        // spanning regions" whenever the range contains more than one
+        // reserved region - and the return value was previously ignored, so
+        // the GOT patch below then faulted on a loader-protected (RO) header
+        // page: SIGSEGV right after "XEX loaded". Walk the region chain
+        // instead: protect each committed run with identical attributes
+        // (single-region chunks never span), skip free/reserved gaps, and
+        // dump the heap map if anything still refuses, so the next log shows
+        // the exact region layout.
         auto* heap = rt->memory()->LookupHeap(PPC_IMAGE_BASE);
         if (heap) {
-            heap->Protect(PPC_IMAGE_BASE, PPC_IMAGE_SIZE,
-                          rex::memory::kMemoryProtectRead | rex::memory::kMemoryProtectWrite);
+            const uint32_t kRW = rex::memory::kMemoryProtectRead | rex::memory::kMemoryProtectWrite;
+            const uint32_t image_end = PPC_IMAGE_BASE + PPC_IMAGE_SIZE;
+            const uint32_t page_sz = heap->page_size();
+            uint32_t protected_bytes = 0;
+            uint32_t failed_bytes = 0;
+            uint32_t cursor = PPC_IMAGE_BASE;
+            while (cursor < image_end) {
+                rex::memory::HeapAllocationInfo info;
+                if (!heap->QueryRegionInfo(cursor, &info)) {
+                    // Out of range / query failure - advance defensively.
+                    cursor += page_sz;
+                    continue;
+                }
+                uint32_t run = info.region_size;
+                if (run == 0) {
+                    run = page_sz;
+                }
+                const uint32_t chunk = std::min<uint32_t>(run, image_end - cursor);
+                if (chunk == 0) {
+                    break;
+                }
+                if ((info.state & rex::memory::kMemoryAllocationCommit) != 0) {
+                    if (heap->Protect(cursor, chunk, kRW)) {
+                        protected_bytes += chunk;
+                    } else {
+                        failed_bytes += chunk;
+                    }
+                }
+                cursor += chunk;
+            }
+            if (failed_bytes != 0) {
+                fprintf(stderr,
+                        "[Main] Image unprotect: RW ok=%u bytes, FAILED=%u bytes - dumping heap map\n",
+                        protected_bytes, failed_bytes);
+                fflush(stderr);
+                heap->DumpMap();
+            } else {
+                fprintf(stderr, "[Main] Image unprotect: RW over %u committed bytes (region walk)\n",
+                        protected_bytes);
+                fflush(stderr);
+            }
+            // The only mandatory patch target: the GPU context GOT entry.
+            // Verify its page is actually writable before touching it - a
+            // silent failure here becomes an unrecoverable SIGSEGV later.
+            const uint32_t got_page = GOT_GPU_CONTEXT & ~(page_sz - 1);
+            rex::memory::HeapAllocationInfo got_info;
+            const bool got_query_ok = heap->QueryRegionInfo(got_page, &got_info);
+            if (!got_query_ok ||
+                (got_info.protect & rex::memory::kMemoryProtectWrite) == 0) {
+                const bool fixed = got_query_ok && heap->Protect(got_page, page_sz, kRW);
+                if (!fixed) {
+                    fprintf(stderr,
+                            "[Main] FATAL: GOT page %08X still not writable after region walk "
+                            "(query_ok=%d state=%u protect=%u) - aborting instead of faulting\n",
+                            got_page, (int)got_query_ok, got_info.state, got_info.protect);
+                    fflush(stderr);
+                    heap->DumpMap();
+                    std::_Exit(70);
+                }
+            }
         }
         DIAG_EMIT("[Main] XEX loaded — PE data sections now authoritative\n");
     }
@@ -1298,10 +1370,7 @@ int main(int argc, char *argv[])
     // xex_header_data diff removed — was a diagnostic for an overlay
     // we stopped applying. rexglue's LoadXexImage is authoritative.
     {
-        // GPU context GOT entry — keep this patch.
-        // RexGlue may not resolve this specific import (ordinal 446).
-        constexpr uint32_t GOT_GPU_CONTEXT = 0x82000768;
-        constexpr uint32_t GPU_CONTEXT_GLOBAL = 0x83124900;
+        // GOT_GPU_CONTEXT / GPU_CONTEXT_GLOBAL declared above Step 2.
         uint32_t currentGOT = __builtin_bswap32(*reinterpret_cast<uint32_t*>(g_memory.base + GOT_GPU_CONTEXT));
         if (currentGOT != GPU_CONTEXT_GLOBAL) {
             uint32_t* gotEntry = reinterpret_cast<uint32_t*>(g_memory.base + GOT_GPU_CONTEXT);
