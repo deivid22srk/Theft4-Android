@@ -95,7 +95,34 @@ bool PostProcessRenderer::Initialize(RenderDevice* device, RenderPipelineLayout*
     if (m_initialized) {
         return true;
     }
-    
+
+    // =======================================================================
+    // NOTE (Vulkan): the effect shaders below (TAA/SMAA/FSR1/SSAO/DoF/SSR/
+    // Bloom/SunShafts/FilmGrain/Chromatic/MotionBlur/Vignette) are embedded as
+    // SPIR-V compiled with classic HLSL register bindings, and DXC assigned
+    // COLLIDING bindings: sampled images (t0-t2), samplers (s0-s1) and the
+    // constant block (b0) all decorate set 0 / bindings 0-2 (verified by
+    // disassembling taa_ps SPIR-V: g_colorTex@b0, g_linearSampler@b0,
+    // TAAConstants@b0). No valid Vulkan descriptor set layout can express
+    // that. Mesa Turnip SIGSEGVs inside vkCreateGraphicsPipelines reconciling
+    // the shader against the pipeline layout (reproduced on two independent
+    // Turnip builds, Adreno 730); permissive drivers create pipelines that
+    // sample undefined descriptors. Until these shaders are rebuilt in the
+    // bindless convention used by video.cpp (g_Texture2DDescriptorHeap +
+    // g_PushConstants - like gamma_correction_ps/hdr_tonemap_ps, which create
+    // fine) AND descriptor binding plumbing is added, ALL post-process
+    // effects must stay disabled on Vulkan. The native in-game effects
+    // (EAA/postfx) remain active; custom ModernAA/Bloom/DoF/etc. are ignored.
+    // =======================================================================
+    if (GetCurrentBackend() == Backend::VULKAN) {
+        LOG_WARNING("[PostProcessRenderer] Vulkan backend: custom post-process effects disabled "
+                    "(effect shader bindings are incompatible with Vulkan descriptor layouts); "
+                    "native in-game effects remain active");
+        LIBERTY_GPU_CRUMB("pp: effects disabled on Vulkan (incompatible shader bindings)");
+        m_initialized = false;
+        return false;
+    }
+
     m_device = device;
     m_pipelineLayout = pipelineLayout;
     m_textureDescriptorSet = textureDescriptorSet;

@@ -16,7 +16,13 @@
 #include <signal.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <unistd.h>
+
+#if REX_PLATFORM_ANDROID
+#include <android/log.h>
+#endif
 
 #include <rex/assert.h>
 #include <rex/logging.h>
@@ -159,6 +165,7 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
   for (size_t i = 0; i < rex::countof(handlers_) && handlers_[i].first; ++i) {
     if (handlers_[i].first(&ex, handlers_[i].second)) {
       // Exception handled.
+      // (fallthrough below only runs when nothing handled the exception)
 #if REX_ARCH_AMD64
       mcontext.gregs[REG_RIP] = greg_t(thread_context.rip);
       mcontext.gregs[REG_EFL] = greg_t(thread_context.eflags);
@@ -203,6 +210,39 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
       }
 #endif  // REX_ARCH
       return;
+    }
+  }
+
+  // No custom handler claimed this exception: on return it re-faults and the
+  // OS default action kills the process (ART/bionic chain resets to SIG_DFL).
+  // Dump the fault details NOW - this is the only surviving record of where
+  // the crash happened. Async-signal-safety: no allocations, no locks, no
+  // spdlog - only snprintf/write/__android_log_write (same pattern Chromium
+  // and debuggerd use inside signal contexts).
+  {
+    const char* sig_name = signal_number == SIGSEGV ? "SIGSEGV"
+                         : signal_number == SIGILL  ? "SIGILL"
+                                                    : "SIGNAL";
+    char buf[192];
+#if REX_ARCH_ARM64
+    int len = snprintf(buf, sizeof(buf),
+                       "unhandled %s: si_addr=%p pc=%p lr=%p sp=%p", sig_name,
+                       signal_info ? signal_info->si_addr : nullptr,
+                       (void*)mcontext.pc, (void*)mcontext.regs[30],
+                       (void*)mcontext.sp);
+#elif REX_ARCH_AMD64
+    int len = snprintf(buf, sizeof(buf), "unhandled %s: si_addr=%p rip=%p",
+                       sig_name, signal_info ? signal_info->si_addr : nullptr,
+                       (void*)mcontext.gregs[REG_RIP]);
+#else
+    int len = snprintf(buf, sizeof(buf), "unhandled %s", sig_name);
+#endif
+    if (len > 0) {
+#if REX_PLATFORM_ANDROID
+      __android_log_write(ANDROID_LOG_FATAL, "RexGlue", buf);
+#endif
+      (void)write(2, buf, (size_t)len);
+      (void)write(2, "\n", 1);
     }
   }
 }
