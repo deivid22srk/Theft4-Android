@@ -53,6 +53,8 @@ struct XContentFileSystem : VirtualFileSystem
 
     XContentFileSystem(const std::filesystem::path &contentPath);
     bool load(const std::string &path, uint8_t *fileData, size_t fileDataMaxByteCount) const override;
+    // Un-hide the base-class convenience overload load(path, std::vector<uint8_t>&).
+    using VirtualFileSystem::load;
     size_t getSize(const std::string &path) const override;
     bool exists(const std::string &path) const override;
     const std::string &getName() const override;

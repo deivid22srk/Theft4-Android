@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <fstream>
 
 #include "virtual_file_system.h"
 
@@ -28,6 +29,9 @@ struct DirectoryFileSystem : VirtualFileSystem
             return false;
         }
     }
+
+    // Un-hide the base-class convenience overload load(path, std::vector<uint8_t>&).
+    using VirtualFileSystem::load;
 
     size_t getSize(const std::string &path) const override
     {
