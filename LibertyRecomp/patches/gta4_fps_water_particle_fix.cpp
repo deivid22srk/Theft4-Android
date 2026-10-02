@@ -44,12 +44,12 @@ struct SplashFrameOverride
 
 thread_local SplashFrameOverride gSplashFrameOverride;
 
-float LoadGameplayTimeStep() noexcept
+float LoadGameplayTimeStep(std::uint8_t* base) noexcept
 {
     return std::bit_cast<float>(PPC_LOAD_U32(kGameplayTimeStepAddress));
 }
 
-void RestoreRawFrameCounter() noexcept
+void RestoreRawFrameCounter(std::uint8_t* base) noexcept
 {
     if (!gSplashFrameOverride.active ||
         !gSplashFrameOverride.frameAdjusted)
@@ -62,9 +62,9 @@ void RestoreRawFrameCounter() noexcept
     gSplashFrameOverride.frameAdjusted = false;
 }
 
-void CorrectSplashRippleGate(PPCContext& ctx) noexcept
+void CorrectSplashRippleGate(PPCContext& ctx, std::uint8_t* base) noexcept
 {
-    const float timeStepSeconds = LoadGameplayTimeStep();
+    const float timeStepSeconds = LoadGameplayTimeStep(base);
     if (!(timeStepSeconds > 0.0f) ||
         timeStepSeconds >= kReferenceFrameSeconds)
     {
@@ -164,7 +164,7 @@ PPC_FUNC_HOOK(sub_8267F318)
     };
 
     __imp__sub_8267F318(ctx, base);
-    gta4::fps::water_particles::RestoreRawFrameCounter();
+    gta4::fps::water_particles::RestoreRawFrameCounter(base);
     gta4::fps::water_particles::gSplashFrameOverride = previous;
 }
 
@@ -181,7 +181,7 @@ PPC_FUNC_HOOK(sub_8234AB70)
     __imp__sub_8234AB70(ctx, base);
 
     if (isSplashModuloPath)
-        gta4::fps::water_particles::CorrectSplashRippleGate(ctx);
+        gta4::fps::water_particles::CorrectSplashRippleGate(ctx, base);
 }
 
 // sub_82347B08 is the leaf generic water-particle emitter. Restore the real
@@ -192,7 +192,7 @@ PPC_FUNC_HOOK(sub_82347B08)
         static_cast<std::uint32_t>(ctx.lr) ==
             gta4::fps::water_particles::kSplashRippleEmitterReturnAddress)
     {
-        gta4::fps::water_particles::RestoreRawFrameCounter();
+        gta4::fps::water_particles::RestoreRawFrameCounter(base);
     }
 
     __imp__sub_82347B08(ctx, base);
