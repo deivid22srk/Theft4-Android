@@ -1,10 +1,18 @@
 #include "embedded_assets.h"
 #include "platform_paths.h"
 
+#if defined(__ANDROID__)
+// XDVDFS reader (Xenia-derived) used to stage the host-side payload
+// (default.xex) out of the user-selected disc image without extraction.
+#include "iso_file_system.h"
+#endif
+
 #include <fstream>
 #include <filesystem>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <vector>
 
 #include <rex/platform.h>
 
@@ -26,6 +34,13 @@
 // null until the user commits a picker selection. Takes precedence over the
 // CMake-baked path + the internal-storage fallback when non-null.
 extern "C" const char* g_androidGameRoot;
+
+// User-selected game ISO (XenDroid-style delivery), published via
+// Java_com_libertyrecomp_LibertySDLActivity_nativeSetGameIso. Mutually
+// exclusive with g_androidGameRoot: when set, the disc image is mounted
+// read-only IN PLACE by ReXGlue's DiscImageDevice and only default.xex is
+// staged into internal storage by EnsureIsoPayload() below.
+extern "C" const char* g_androidGameIso;
 #endif
 
 #if defined(__ANDROID__)
@@ -119,7 +134,7 @@ static std::filesystem::path ResolveEmbeddedGameRoot()
     // Precedence (first non-empty wins):
     //   1. Path pushed from Java via nativeSetGameRoot() — folder-picker UI.
     //      This is the primary delivery path in the current build.
-    //   2. Extracted internal-storage location (used by the OBB flow).
+    //   2. Internal-storage location (OBB flow, and ISO mode's staging dir).
     //
     // The picker-supplied path already points *directly* at the directory
     // containing default.xex + *.rpf; unlike the OBB flow it is NOT nested
@@ -148,6 +163,125 @@ std::filesystem::path EmbeddedAssets::GetGameRoot()
 {
     static std::filesystem::path root = ResolveEmbeddedGameRoot();
     return root;
+}
+
+std::filesystem::path EmbeddedAssets::GetGameIsoPath()
+{
+#if defined(__ANDROID__)
+    if (g_androidGameIso && g_androidGameIso[0] != '\0')
+        return std::filesystem::path(g_androidGameIso);
+    return {};
+#else
+    return {};
+#endif
+}
+
+bool EmbeddedAssets::EnsureIsoPayload()
+{
+#if defined(__ANDROID__)
+    std::filesystem::path isoPath = GetGameIsoPath();
+    if (isoPath.empty())
+        return true; // Folder/OBB delivery — nothing to stage.
+
+    std::error_code ec;
+    std::filesystem::path gameRoot = GetGameRoot();
+    std::filesystem::create_directories(gameRoot, ec);
+
+    std::filesystem::path xexPath    = gameRoot / "default.xex";
+    std::filesystem::path markerPath = gameRoot / ".iso_source";
+
+    std::error_code sizeEc;
+    uintmax_t isoSize = std::filesystem::file_size(isoPath, sizeEc);
+    if (sizeEc) {
+        fprintf(stderr, "[EmbeddedAssets] ISO not readable: %s\n",
+                isoPath.string().c_str());
+        fflush(stderr);
+        return false;
+    }
+
+    // Fast path: the same ISO (path + size fingerprint) was already staged.
+    if (std::filesystem::exists(xexPath, ec)) {
+        std::ifstream marker(markerPath);
+        std::string line;
+        if (marker.is_open() && std::getline(marker, line) &&
+            line == (isoPath.string() + ":" + std::to_string(isoSize)))
+        {
+            printf("[EmbeddedAssets] ISO payload already staged from %s\n",
+                   isoPath.string().c_str());
+            fflush(stdout);
+            return true;
+        }
+    }
+
+    // Parse the XDVDFS catalogue in place (mmap — no data is copied here).
+    auto isoFs = ISOFileSystem::create(isoPath);
+    if (!isoFs) {
+        fprintf(stderr, "[EmbeddedAssets] Not a valid Xbox 360 disc image: %s\n",
+                isoPath.string().c_str());
+        fflush(stderr);
+        return false;
+    }
+    if (!isoFs->exists("default.xex")) {
+        fprintf(stderr, "[EmbeddedAssets] ISO root has no default.xex — "
+                        "is %s a GTA IV disc?\n", isoPath.string().c_str());
+        fflush(stderr);
+        return false;
+    }
+
+    std::vector<uint8_t> xex;
+    if (!isoFs->load("default.xex", xex) || xex.empty()) {
+        fprintf(stderr, "[EmbeddedAssets] Failed to read default.xex from ISO\n");
+        fflush(stderr);
+        return false;
+    }
+
+    // Stage default.xex for the host-side XEX loader (LdrLoadModule reads it
+    // via std::filesystem). Write to a temp file, fsync, then rename.
+    std::filesystem::path tmpPath = xexPath.string() + ".tmp";
+    int fd = ::open(tmpPath.c_str(),
+                    O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC,
+                    S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+    if (fd < 0) {
+        fprintf(stderr, "[EmbeddedAssets] Cannot write %s\n", tmpPath.string().c_str());
+        fflush(stderr);
+        return false;
+    }
+    size_t off = 0;
+    while (off < xex.size()) {
+        ssize_t w = ::write(fd, xex.data() + off, xex.size() - off);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            ::close(fd);
+            return false;
+        }
+        off += static_cast<size_t>(w);
+    }
+    fsync_fd(fd);
+    ::close(fd);
+
+    std::filesystem::rename(tmpPath, xexPath, ec);
+    if (ec) {
+        fprintf(stderr, "[EmbeddedAssets] Rename of staged xex failed: %s\n",
+                ec.message().c_str());
+        fflush(stderr);
+        return false;
+    }
+
+    {
+        std::ofstream marker(markerPath, std::ios::trunc);
+        marker << (isoPath.string() + ":" + std::to_string(isoSize));
+    }
+
+    // NOTE: only default.xex (a few MB) hits internal storage. The multi-GB
+    // RPF content is served in place from the ISO: Runtime::SetupVfs()
+    // detects the .iso game_data_root and mounts DiscImageDevice.
+    printf("[EmbeddedAssets] Staged default.xex (%zu bytes) from ISO %s — "
+           "disc content mounts in place\n", xex.size(), isoPath.string().c_str());
+    fflush(stdout);
+    return true;
+#else
+    return true;
+#endif // __ANDROID__
 }
 
 std::filesystem::path EmbeddedAssets::GetDLCRoot()

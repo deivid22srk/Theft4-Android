@@ -62,10 +62,17 @@ public class LibertyPickerActivity extends Activity {
 
     private static final String PREFS_NAME   = "liberty_recomp_prefs";
     private static final String PREF_GAME_DIR = "game_dir";
+    private static final String PREF_GAME_ISO = "game_iso";
 
     private static final int REQ_PICK_FOLDER      = 1001;
+    private static final int REQ_PICK_ISO         = 1004;
     private static final int REQ_MANAGE_STORAGE   = 1002;
     private static final int REQ_LEGACY_STORAGE   = 1003;
+
+    // Minimum plausible size for a GTA IV Xbox 360 disc image (~7.3 GB
+    // officially, but trimmed/DVDF rips exist). Anything below 64 MiB is
+    // certainly not a usable disc and the picker rejects it up front.
+    private static final long MIN_ISO_BYTES = 64L * 1024L * 1024L;
 
     // Files every extracted GTA IV dump must contain before the native side
     // is willing to boot. Matches root CMakeLists.txt for parity.
@@ -84,9 +91,11 @@ public class LibertyPickerActivity extends Activity {
     private static final int C_ERR   = 0xFFFF6B6B;
 
     private String   mGameDir;
+    private String   mGameIso;
 
     private TextView mPathLabel;
     private TextView mStatusLabel;
+    private TextView mIsoLabel;
     private Button   mPlayBtn;
 
     // ─── Lifecycle ─────────────────────────────────────────────────────────
@@ -99,6 +108,7 @@ public class LibertyPickerActivity extends Activity {
         super.onCreate(savedInstanceState);
 
         mGameDir = prefs().getString(PREF_GAME_DIR, null);
+        mGameIso = prefs().getString(PREF_GAME_ISO, null);
         buildPickerUI();
     }
 
@@ -128,6 +138,28 @@ public class LibertyPickerActivity extends Activity {
                 } else {
                     Toast.makeText(this,
                         "Could not resolve picker URI to a filesystem path. " +
+                        "Use \"Allow access to manage all files\" and retry.",
+                        Toast.LENGTH_LONG).show();
+                }
+            }
+            return;
+        }
+
+        if (requestCode == REQ_PICK_ISO) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                Uri doc = data.getData();
+                try {
+                    getContentResolver().takePersistableUriPermission(
+                        doc,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                } catch (Exception ignored) { }
+
+                String absPath = resolveDocumentToAbsolutePath(doc);
+                if (absPath != null) {
+                    setGameIsoAndRefresh(absPath);
+                } else {
+                    Toast.makeText(this,
+                        "Could not resolve the picked ISO to a filesystem path. " +
                         "Use \"Allow access to manage all files\" and retry.",
                         Toast.LENGTH_LONG).show();
                 }
@@ -188,6 +220,7 @@ public class LibertyPickerActivity extends Activity {
 
         root.addView(buildPermissionCard());
         root.addView(buildFolderCard());
+        root.addView(buildIsoCard());
 
         mPlayBtn = new Button(this);
         mPlayBtn.setText(getString(R.string.picker_play));
@@ -284,6 +317,45 @@ public class LibertyPickerActivity extends Activity {
         return card;
     }
 
+    /**
+     * Card letting the user pick a single .iso file instead of an extracted
+     * folder (XenDroid-style delivery). The ISO is read IN PLACE — the game
+     * disc is mounted read-only and nothing is copied into the app.
+     */
+    private View buildIsoCard() {
+        LinearLayout card = newCard();
+
+        TextView label = new TextView(this);
+        label.setText(getString(R.string.iso_card_title));
+        label.setTextSize(11f);
+        label.setTypeface(Typeface.DEFAULT_BOLD);
+        label.setTextColor(C_TEXT);
+        card.addView(label);
+
+        mIsoLabel = new TextView(this);
+        mIsoLabel.setTextSize(13f);
+        mIsoLabel.setTextColor(C_MUTED);
+        LinearLayout.LayoutParams isoLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        isoLp.topMargin = dp(4);
+        mIsoLabel.setLayoutParams(isoLp);
+        card.addView(mIsoLabel);
+
+        Button pick = new Button(this);
+        pick.setText(getString(R.string.picker_pick_iso));
+        LinearLayout.LayoutParams pickLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        pickLp.topMargin = dp(10);
+        pick.setLayoutParams(pickLp);
+        pick.setOnClickListener(v -> pickIso());
+        card.addView(pick);
+
+        card.setTag("iso-card");
+        return card;
+    }
+
     private LinearLayout newCard() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
@@ -307,6 +379,9 @@ public class LibertyPickerActivity extends Activity {
             permCard.setVisibility(haveStorageAccess() ? View.GONE : View.VISIBLE);
         }
 
+        boolean folderValid = mGameDir != null && validateGameDir(mGameDir) == null;
+        boolean isoValid    = mGameIso != null && validateGameIso(mGameIso) == null;
+
         mPathLabel.setText(mGameDir == null
             ? getString(R.string.picker_no_folder)
             : getString(R.string.picker_current_path, mGameDir));
@@ -322,7 +397,14 @@ public class LibertyPickerActivity extends Activity {
             mStatusLabel.setVisibility(View.GONE);
         }
 
-        boolean canPlay = haveStorageAccess() && mGameDir != null && missing == null;
+        if (mIsoLabel != null) {
+            mIsoLabel.setText(mGameIso == null
+                ? getString(R.string.iso_none)
+                : getString(R.string.picker_current_iso, mGameIso));
+            mIsoLabel.setTextColor(isoValid ? C_MUTED : C_ERR);
+        }
+
+        boolean canPlay = haveStorageAccess() && (folderValid || isoValid);
         mPlayBtn.setEnabled(canPlay);
         mPlayBtn.setAlpha(canPlay ? 1f : 0.5f);
     }
@@ -389,7 +471,17 @@ public class LibertyPickerActivity extends Activity {
 
     private void setGameDirAndRefresh(String path) {
         mGameDir = path;
-        prefs().edit().putString(PREF_GAME_DIR, path).apply();
+        mGameIso = null; // last selection wins; modes are mutually exclusive
+        prefs().edit().putString(PREF_GAME_DIR, path)
+                      .remove(PREF_GAME_ISO).apply();
+        refreshPickerStatus();
+    }
+
+    private void setGameIsoAndRefresh(String path) {
+        mGameIso = path;
+        mGameDir = null; // last selection wins; modes are mutually exclusive
+        prefs().edit().putString(PREF_GAME_ISO, path)
+                      .remove(PREF_GAME_DIR).apply();
         refreshPickerStatus();
     }
 
@@ -409,6 +501,70 @@ public class LibertyPickerActivity extends Activity {
             }
         }
         return missing.length() == 0 ? null : missing.toString();
+    }
+
+    // ─── ISO picker flow (XenDroid-style in-place delivery) ────────────────
+
+    private void pickIso() {
+        if (!haveStorageAccess()) {
+            requestStorageAccess();
+            return;
+        }
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                 | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Uri initial = DocumentsContract.buildRootUri(
+                "com.android.externalstorage.documents",
+                "primary");
+            i.putExtra(DocumentsContract.EXTRA_INITIAL_URI, initial);
+        }
+        startActivityForResult(i, REQ_PICK_ISO);
+    }
+
+    /**
+     * Converts a single-document SAF URI into an absolute POSIX path. The
+     * native side opens the disc image with plain mmap()/open() so a real
+     * path is required. With MANAGE_EXTERNAL_STORAGE granted this works for
+     * anything under /storage/emulated/0/.
+     */
+    @SuppressLint("NewApi")
+    private String resolveDocumentToAbsolutePath(Uri docUri) {
+        try {
+            String docId = DocumentsContract.getDocumentId(docUri);
+            if (docId == null) return null;
+            String[] parts = docId.split(":", 2);
+            if (parts.length < 2) return null;
+            String volume = parts[0];
+            String relPath = parts[1];
+            File base;
+            if ("primary".equalsIgnoreCase(volume)) {
+                base = Environment.getExternalStorageDirectory();
+            } else {
+                base = new File("/storage/" + volume);
+            }
+            File resolved = new File(base, relPath);
+            return resolved.getAbsolutePath();
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to resolve document URI: " + docUri, e);
+            return null;
+        }
+    }
+
+    /**
+     * Returns null when the file is a plausible GTA IV Xbox 360 disc image,
+     * or a human-readable reason why it is not. Full XDVDFS + magic
+     * validation happens on the native side (ISOFileSystem::create).
+     */
+    private static String validateGameIso(String path) {
+        if (path == null || path.isEmpty()) return "(no path)";
+        File f = new File(path);
+        if (!f.isFile()) return "(not a file)";
+        if (!f.canRead()) return "(not readable)";
+        if (f.length() < MIN_ISO_BYTES) return "(file too small for a disc image)";
+        return null;
     }
 
     // ─── Storage-access gate ───────────────────────────────────────────────
@@ -448,11 +604,13 @@ public class LibertyPickerActivity extends Activity {
             requestStorageAccess();
             return;
         }
-        if (mGameDir == null || validateGameDir(mGameDir) != null) {
+        boolean folderValid = mGameDir != null && validateGameDir(mGameDir) == null;
+        boolean isoValid    = mGameIso != null && validateGameIso(mGameIso) == null;
+        if (!folderValid && !isoValid) {
             Toast.makeText(this, R.string.picker_no_folder, Toast.LENGTH_LONG).show();
             return;
         }
-        // LibertySDLActivity reads the persisted path from prefs inside its
+        // LibertySDLActivity reads the persisted source from prefs inside its
         // own onCreate() — before super.onCreate() runs — and pushes it to
         // the native side from loadLibraries(), which SDLActivity invokes
         // strictly before the SDL_main thread can start (the thread only

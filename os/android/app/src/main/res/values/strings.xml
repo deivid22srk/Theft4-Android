@@ -4,13 +4,19 @@
 
     <!-- Folder picker (pre-SDL UI). -->
     <string name="picker_title">Liberty Recompiled</string>
-    <string name="picker_subtitle">Select your extracted GTA IV Xbox 360 game folder to continue.</string>
+    <string name="picker_subtitle">Select your extracted GTA IV Xbox 360 game folder — or just the game\'s .iso file — to continue. Nothing is copied into the app.</string>
     <string name="picker_pick_folder">Pick game folder…</string>
     <string name="picker_play">Play</string>
     <string name="picker_change_folder">Change folder</string>
-    <string name="picker_current_path">Current: %1$s</string>
-    <string name="picker_no_folder">No game folder selected.</string>
+    <string name="picker_current_path">Folder: %1$s</string>
+    <string name="picker_no_folder">No game folder or ISO selected.</string>
     <string name="picker_missing_files">Selected folder is missing required files:\n%1$s</string>
+
+    <!-- ISO picker (XenDroid-style in-place delivery). -->
+    <string name="iso_card_title">Game ISO (single file, read in place)</string>
+    <string name="picker_pick_iso">Pick game ISO (.iso)…</string>
+    <string name="picker_current_iso">ISO: %1$s</string>
+    <string name="iso_none">No ISO selected (folder mode is active).</string>
 
     <!-- Storage permission prompt. -->
     <string name="perm_title">All-files access required</string>

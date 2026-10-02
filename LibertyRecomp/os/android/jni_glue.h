@@ -16,6 +16,13 @@ extern int      g_androidApiLevel;
 // nativeSetGameRoot().
 extern "C" const char* g_androidGameRoot;
 
+// Game ISO file supplied by LibertySDLActivity's ISO picker (XenDroid-style
+// delivery). Mutually exclusive with g_androidGameRoot: when set, only the
+// small host-side payload (default.xex) is extracted into internal storage
+// and the disc content is mounted IN PLACE from the ISO by ReXGlue's
+// DiscImageDevice — no multi-GB copy. Owning pointer, same rules as above.
+extern "C" const char* g_androidGameIso;
+
 // RAII helper: attaches the current thread to the VM if needed, and detaches
 // on destruction (only if this object performed the attach).
 class JniScopedAttach

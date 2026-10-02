@@ -42,9 +42,13 @@ public class LibertySDLActivity extends SDLActivity {
     // over between the two activities.
     private static final String PREFS_NAME   = "liberty_recomp_prefs";
     private static final String PREF_GAME_DIR = "game_dir";
+    private static final String PREF_GAME_ISO = "game_iso";
 
-    // Game root resolved by LibertyPickerActivity and persisted in prefs.
+    // Game source resolved by LibertyPickerActivity and persisted in prefs.
+    // Exactly one of these is set: a folder (default.xex + *.rpf dumped
+    // together) OR a single .iso file (XenDroid-style in-place delivery).
     private String mGameDir;
+    private String mGameIso;
 
     // ─── Native bridges defined in LibertyRecomp/os/android/jni_glue.cpp ───
     // JNI symbol names embed this class name — do not move these
@@ -52,6 +56,7 @@ public class LibertySDLActivity extends SDLActivity {
     private static native void nativeSetActivity(Activity activity, int apiLevel);
     private static native void nativeSetPaths(String internalPath, String obbPath);
     private static native void nativeSetGameRoot(String gameRoot);
+    private static native void nativeSetGameIso(String isoPath);
     // vibration_android.cpp
     private static native void nativeSetContext(Context context);
 
@@ -73,13 +78,15 @@ public class LibertySDLActivity extends SDLActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        // Cache the game root before anything else, then satisfy the
+        // Cache the game source before anything else, then satisfy the
         // Activity contract IMMEDIATELY: super.onCreate() must run on every
         // launch before onCreate() returns, with no deferral and no early
         // returns. (Skipping this is what crashed the previous build with
         // SuperNotCalledException on first run.)
-        mGameDir = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                       .getString(PREF_GAME_DIR, null);
+        android.content.SharedPreferences p =
+            getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        mGameDir = p.getString(PREF_GAME_DIR, null);
+        mGameIso = p.getString(PREF_GAME_ISO, null);
         super.onCreate(savedInstanceState);
     }
 
@@ -103,11 +110,20 @@ public class LibertySDLActivity extends SDLActivity {
             // Vibrator JNI bridge.
             nativeSetContext(this);
 
-            // Game root chosen by the user in LibertyPickerActivity.
+            // Game source chosen in LibertyPickerActivity. Exactly one mode
+            // is active:
+            //   folder → nativeSetGameRoot(): files are read from the picked
+            //            directory in place.
+            //   ISO    → nativeSetGameIso(): the disc image is mounted
+            //            read-only IN PLACE by ReXGlue's DiscImageDevice;
+            //            only default.xex is staged into internal storage.
             if (mGameDir != null && !mGameDir.isEmpty()) {
                 nativeSetGameRoot(mGameDir);
+            } else if (mGameIso != null && !mGameIso.isEmpty()) {
+                nativeSetGameIso(mGameIso);
             }
             Log.i(TAG, "Native context wired: game_dir=" + mGameDir
+                + ", game_iso=" + mGameIso
                 + ", internal=" + internal + ", obb=" + obb);
         } catch (UnsatisfiedLinkError e) {
             Log.e(TAG, "Native path setters unavailable: " + e.getMessage());

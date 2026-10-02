@@ -17,6 +17,10 @@ const char* g_androidObbPath         = nullptr;
 // runtime points at the user-selected game directory instead of the
 // CMake-baked LIBERTY_RECOMP_EMBEDDED_GAME_PATH.
 const char* g_androidGameRoot        = nullptr;
+// Set from LibertySDLActivity's ISO-picker flow (XenDroid-style delivery).
+// Consumed by install/embedded_assets.cpp: only default.xex is staged into
+// internal storage; disc content is mounted in place via DiscImageDevice.
+const char* g_androidGameIso         = nullptr;
 
 namespace {
 // Shared UTF-8 copy helper: allocates a NUL-terminated buffer via malloc so
@@ -133,4 +137,19 @@ Java_com_libertyrecomp_LibertySDLActivity_nativeSetGameRoot(
 {
     free(const_cast<char*>(g_androidGameRoot));
     g_androidGameRoot = CopyJString(env, gameRoot);
+}
+
+// Called by LibertySDLActivity.loadLibraries() when the user selected a game
+// ISO file (XenDroid-style delivery) instead of an extracted folder. The
+// disc image is mounted read-only and IN PLACE by ReXGlue's DiscImageDevice;
+// EmbeddedAssets::EnsureIsoPayload() stages only default.xex into internal
+// storage for the host-side XEX loader.
+extern "C" JNIEXPORT void JNICALL
+Java_com_libertyrecomp_LibertySDLActivity_nativeSetGameIso(
+    JNIEnv* env,
+    jclass  /*clazz*/,
+    jstring isoPath)
+{
+    free(const_cast<char*>(g_androidGameIso));
+    g_androidGameIso = CopyJString(env, isoPath);
 }

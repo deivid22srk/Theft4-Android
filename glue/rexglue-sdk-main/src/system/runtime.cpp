@@ -14,6 +14,7 @@
 #include <rex/diagnostics/gta4_transition.h>
 #include <rex/filesystem/devices/host_path_device.h>
 #include <rex/filesystem/devices/null_device.h>
+#include <rex/filesystem/devices/disc_image_device.h>
 #include <rex/filesystem/vfs.h>
 #include <rex/logging.h>
 #include <rex/perf/counter.h>
@@ -28,6 +29,9 @@
 #include <rex/system/xmemory.h>
 #include <rex/system/xthread.h>
 #include <rex/thread.h>
+
+#include <algorithm>
+#include <cctype>
 
 REXCVAR_DEFINE_STRING(game_data_root, "", "Runtime", "Override game data path");
 REXCVAR_DEFINE_STRING(user_data_root, "", "Runtime", "Override user data path");
@@ -308,19 +312,47 @@ bool Runtime::SetupVfs() {
     return false;
   }
 
-  // Mount game_data_root as \Device\Harddisk0\Partition1
+  // Mount game_data_root as \Device\Harddisk0\Partition1.
+  // Two delivery forms are supported:
+  //   • Directory → HostPathDevice (classic extracted game folder).
+  //   • .iso file → DiscImageDevice (XDVDFS mounted read-only IN PLACE —
+  //     Xenia/XenDroid-style delivery; no extraction or copy is performed).
   auto mount_path = "\\Device\\Harddisk0\\Partition1";
-  auto device = std::make_unique<rex::filesystem::HostPathDevice>(
-      mount_path, abs_game_root, !REXCVAR_GET(allow_game_relative_writes));
-  if (!device->Initialize()) {
-    REXSYS_ERROR("Runtime::SetupVfs: Failed to initialize host path device");
-    return false;
+  bool game_root_is_iso = false;
+  {
+    std::error_code ec;
+    std::string ext = abs_game_root.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    game_root_is_iso = std::filesystem::is_regular_file(abs_game_root, ec) &&
+                       ext == ".iso";
   }
-  if (!file_system_->RegisterDevice(std::move(device))) {
-    REXSYS_ERROR("Runtime::SetupVfs: Failed to register host path device");
-    return false;
+  if (game_root_is_iso) {
+    auto disc_device =
+        std::make_unique<rex::filesystem::DiscImageDevice>(mount_path, abs_game_root);
+    if (!disc_device->Initialize()) {
+      REXSYS_ERROR("Runtime::SetupVfs: Failed to initialize disc image device: {}",
+                   abs_game_root.string());
+      return false;
+    }
+    if (!file_system_->RegisterDevice(std::move(disc_device))) {
+      REXSYS_ERROR("Runtime::SetupVfs: Failed to register disc image device");
+      return false;
+    }
+    REXSYS_INFO("  Mounted disc image {} at {}", abs_game_root.string(), mount_path);
+  } else {
+    auto device = std::make_unique<rex::filesystem::HostPathDevice>(
+        mount_path, abs_game_root, !REXCVAR_GET(allow_game_relative_writes));
+    if (!device->Initialize()) {
+      REXSYS_ERROR("Runtime::SetupVfs: Failed to initialize host path device");
+      return false;
+    }
+    if (!file_system_->RegisterDevice(std::move(device))) {
+      REXSYS_ERROR("Runtime::SetupVfs: Failed to register host path device");
+      return false;
+    }
+    REXSYS_INFO("  Mounted {} at {}", abs_game_root.string(), mount_path);
   }
-  REXSYS_INFO("  Mounted {} at {}", abs_game_root.string(), mount_path);
 
   // Register symbolic links for game: and D:
   file_system_->RegisterSymbolicLink("game:", mount_path);

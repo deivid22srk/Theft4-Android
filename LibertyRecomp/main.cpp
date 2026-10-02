@@ -601,9 +601,46 @@ int main(int argc, char *argv[])
     // RexGlue mounts this as \Device\Harddisk0\Partition1 with game: and d: symlinks.
     // GTA IV-specific symlinks (common:, platform:, audio:) are added after Setup().
     DIAG_EMIT("[Main] Getting game path...\n");
+#if defined(LIBERTY_RECOMP_EMBEDDED_ASSETS) && defined(__ANDROID__)
+    // ── Android ISO delivery mode (XenDroid-style) ──────────────────────────
+    // When the picker selected a .iso file, g_androidGameIso is set. Stage
+    // ONLY the host-side payload (default.xex, a few MB) into internal
+    // storage; the multi-GB RPF content is NOT copied — the VFS mounts the
+    // ISO in place via ReXGlue's DiscImageDevice (see Runtime::SetupVfs()).
+    if (!EmbeddedAssets::EnsureIsoPayload()) {
+        printf("[Main] FATAL: Failed to stage default.xex from the selected ISO\n");
+        fflush(stdout);
+        std::_Exit(1);
+    }
+#endif
     const auto gamePath = GetGamePath();
     DIAG_EMIT("[Main] Game path: %s\n", gamePath.string().c_str());
-    const auto rexContentRoot = gamePath / "game";
+    const auto rexContentRoot =
+#if defined(LIBERTY_RECOMP_EMBEDDED_ASSETS)
+    // Embedded builds: the content root IS the resolved game root —
+    //   folder mode → the picked directory (default.xex + *.rpf at its top),
+    //   ISO mode    → the picked .iso file (read-only DiscImageDevice mount),
+    //   OBB mode    → <internal>/game (same as the desktop-style layout,
+    //                 since GetGameRoot() resolves there for that flow).
+    // The old gamePath/"game" convention broke folder-picker layouts whose
+    // directory wasn't literally named "game" and cannot address an ISO.
+    #if defined(__ANDROID__)
+        EmbeddedAssets::GetGameIsoPath().empty()
+            ? EmbeddedAssets::GetGameRoot()
+            : EmbeddedAssets::GetGameIsoPath();
+    #else
+        EmbeddedAssets::GetGameRoot();
+    #endif
+#else
+        gamePath / "game";
+#endif
+    // Android ISO delivery flag: the content root is a read-only disc image,
+    // so no host-side bridge copies may target it.
+#if defined(__ANDROID__) && defined(LIBERTY_RECOMP_EMBEDDED_ASSETS)
+    const bool androidIsoMode = !EmbeddedAssets::GetGameIsoPath().empty();
+#else
+    const bool androidIsoMode = false;
+#endif
     DIAG_EMIT("[Main] Content root: %s\n", rexContentRoot.string().c_str());
     DIAG_EMIT("[Main] Content root exists: %d\n", (int)std::filesystem::exists(rexContentRoot));
 
@@ -626,12 +663,17 @@ int main(int argc, char *argv[])
     // make_gp4.py packages the staging tree as-is, so the payload has to already
     // contain xbox360/audio/config/* at build time.
 #if !REX_PLATFORM_CONSOLE
+    if (!androidIsoMode) // ISO content is a read-only disc image; skip copies.
     {
         auto destPath   = rexContentRoot / "xbox360" / "audio" / "config";
         auto srcPath    = gamePath / "game" / "audio" / "config";
-        // Also try gamePath directly (audio/ may be beside game/)
+        // Also try gamePath directly (audio/ may be beside game/), then the
+        // flat picker layout (audio/config sits inside the picked root).
         if (!std::filesystem::is_directory(srcPath)) {
             srcPath = gamePath / "audio" / "config";
+        }
+        if (!std::filesystem::is_directory(srcPath)) {
+            srcPath = rexContentRoot / "audio" / "config";
         }
         std::error_code ec;
         if (std::filesystem::is_directory(srcPath, ec) && !std::filesystem::exists(destPath, ec)) {
@@ -655,6 +697,7 @@ int main(int argc, char *argv[])
     // XAM content system and open files directly via the game: VFS mount.
     // The game: mount points to rexContentRoot, so we copy DLC content there.
 #if !REX_PLATFORM_CONSOLE
+    if (!androidIsoMode) // The game: mount is the read-only ISO in this mode.
     {
         struct DlcGameMapping {
             const char* gameDirName;  // What the game probes (game:\DLC1\)
@@ -705,9 +748,10 @@ int main(int argc, char *argv[])
                   rexMarketplaceRoot.string().c_str());
         DIAG_EMIT("[Main] Constructing rex::Runtime...\n");
         s_rexRuntime = std::make_unique<rex::Runtime>(
-            rexContentRoot,                    // game_data_root
+            rexContentRoot,                    // game_data_root (dir or .iso)
             rexSaveRoot,                       // user_data_root
-            rexContentRoot / "update",        // update_data_root
+            androidIsoMode ? std::filesystem::path{}
+                           : rexContentRoot / "update",  // update_data_root
             std::filesystem::path{},           // cache_root
             std::filesystem::path{},           // metadata_root
             rexMarketplaceRoot,                // marketplace_content_root

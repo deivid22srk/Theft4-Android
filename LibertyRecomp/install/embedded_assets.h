@@ -39,6 +39,20 @@ namespace EmbeddedAssets
     ///   Switch → romfs:/game/
     std::filesystem::path GetGameRoot();
 
+    /// Android only: path of the user-selected game ISO (XenDroid-style
+    /// delivery), or empty when running in folder/OBB mode. In ISO mode
+    /// GetGameRoot() resolves to the internal storage game dir and only
+    /// default.xex is staged there — the disc content itself is mounted
+    /// in place from the ISO by ReXGlue's DiscImageDevice.
+    std::filesystem::path GetGameIsoPath();
+
+    /// Android only: when an ISO is selected, extract the host-side payload
+    /// (default.xex) from it into GetGameRoot(). Cheap (a few MB, XDVDFS is
+    /// parsed in place via mmap); the RPF content is NOT copied. Returns
+    /// true immediately in folder/OBB mode, true on successful staging and
+    /// false when the ISO is missing/invalid or lacks default.xex.
+    bool EnsureIsoPayload();
+
     /// Returns the path of the embedded DLC, or empty if not present.
     std::filesystem::path GetDLCRoot();
 
