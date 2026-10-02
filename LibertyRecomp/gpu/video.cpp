@@ -58,6 +58,7 @@ namespace GTAIV {
 #include <kernel/memory.h>
 #include <kernel/xdbf.h>
 #include <plume_render_interface.h>
+#include "gpu_breadcrumbs.h"
 #ifdef LIBERTY_RECOMP_HAS_RESOURCES
 #include <res/bc_diff/button_bc_diff.bin.h>
 #include <res/font/im_font_atlas.dds.h>
@@ -2328,15 +2329,18 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
               static_cast<int>(g_backbufferFormat), static_cast<int>(Config::HDRMode.Value),
               hdrEnabled ? "enabled" : "disabled");
     
+    LIBERTY_GPU_CRUMB("gpu:init: createSwapChain enter (surface + format pick)");
     g_swapChain = g_queue->createSwapChain(RenderSwapChainDesc(GameWindow::s_renderWindow, g_backbufferFormat, bufferCount, false, Config::MaxFrameLatency));
     g_swapChain->setVsyncEnabled(Config::VSync);
     g_swapChainValid = !g_swapChain->needsResize();
+    LIBERTY_GPU_CRUMB("gpu:init: swapchain desc done (vkSwapchainKHR deferred to resize)");
 
     for (auto& acquireSemaphore : g_acquireSemaphores)
         acquireSemaphore = g_device->createCommandSemaphore();
     
     for (auto& renderSemaphore : g_renderSemaphores)
         renderSemaphore = g_device->createCommandSemaphore();
+    LIBERTY_GPU_CRUMB("gpu:init: semaphores done");
 
     RenderPipelineLayoutBuilder pipelineLayoutBuilder;
     pipelineLayoutBuilder.begin(false, true);
@@ -2347,6 +2351,7 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
     descriptorSetBuilder.end(true, TEXTURE_DESCRIPTOR_SIZE);
     
     g_textureDescriptorSet = descriptorSetBuilder.create(g_device.get());
+    LIBERTY_GPU_CRUMB("gpu:init: texture descriptor set done");
     
     for (size_t i = 0; i < TEXTURE_DESCRIPTOR_NULL_COUNT; i++)
     {
@@ -2396,6 +2401,7 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
 
         g_textureDescriptorSet->setTexture(i, texture.get(), RenderTextureLayout::SHADER_READ, textureView.get());
     }
+    LIBERTY_GPU_CRUMB("gpu:init: blank textures done");
 
     pipelineLayoutBuilder.addDescriptorSet(descriptorSetBuilder);
     pipelineLayoutBuilder.addDescriptorSet(descriptorSetBuilder);
@@ -2418,6 +2424,7 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
     conditionalSurveyBufferDesc.heapType = RenderHeapType::DEFAULT;
     conditionalSurveyBufferDesc.flags = RenderBufferFlag::STORAGE | RenderBufferFlag::UNORDERED_ACCESS;
     g_conditionalSurveyBuffer = g_device->createBuffer(conditionalSurveyBufferDesc);
+    LIBERTY_GPU_CRUMB("gpu:init: conditional survey buffer done");
 
     RenderDescriptorSetBuilder conditionalSurveyDescriptorSetBuilder;
     conditionalSurveyDescriptorSetBuilder.begin();
@@ -2444,6 +2451,7 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
     pipelineLayoutBuilder.end();
     
     g_pipelineLayout = pipelineLayoutBuilder.create(g_device.get());
+    LIBERTY_GPU_CRUMB("gpu:init: pipeline layout done");
 
     g_copyShader = CREATE_SHADER(copy_vs);
     g_copyColorShader = CREATE_SHADER(copy_color_ps);
@@ -2458,6 +2466,7 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
     desc.depthWriteEnabled = true;
     desc.depthTargetFormat = RenderFormat::D32_FLOAT_S8_UINT;
     g_copyDepthPipeline = g_device->createGraphicsPipeline(desc);
+    LIBERTY_GPU_CRUMB("gpu:init: copyDepth pipeline done");
 
     g_resolveMsaaColorShaders[0] = CREATE_SHADER(resolve_msaa_color_2x);
     g_resolveMsaaColorShaders[1] = CREATE_SHADER(resolve_msaa_color_4x);
@@ -2489,6 +2498,7 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
         desc.depthTargetFormat = RenderFormat::D32_FLOAT_S8_UINT;
         g_resolveMsaaDepthPipelines[i] = g_device->createGraphicsPipeline(desc);
     }
+    LIBERTY_GPU_CRUMB("gpu:init: msaa resolve pipelines done");
 
     for (auto& shader : g_gaussianBlurShaders)
         shader = std::make_unique<GuestShader>(ResourceType::PixelShader);
@@ -2507,7 +2517,9 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
     g_enhancedBurnoutBlurPSShader = std::make_unique<GuestShader>(ResourceType::PixelShader);
     g_enhancedBurnoutBlurPSShader->shader = CREATE_SHADER(enhanced_burnout_blur_ps);
 
+    LIBERTY_GPU_CRUMB("gpu:init: imgui backend enter");
     CreateImGuiBackend();
+    LIBERTY_GPU_CRUMB("gpu:init: imgui backend done");
 
     auto gammaCorrectionShader = CREATE_SHADER(gamma_correction_ps);
 
@@ -2519,6 +2531,7 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
     desc.renderTargetBlend[0] = RenderBlendDesc::Copy();
     desc.renderTargetCount = 1;
     g_gammaCorrectionPipeline = g_device->createGraphicsPipeline(desc);
+    LIBERTY_GPU_CRUMB("gpu:init: gamma pipeline done");
 
     // Create HDR tonemap pipeline for HDR output modes (scRGB, HDR10)
     auto hdrTonemapShader = CREATE_SHADER(hdr_tonemap_ps);
@@ -2526,6 +2539,7 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
         desc.pixelShader = hdrTonemapShader.get();
         // HDR output uses R16G16B16A16_FLOAT for scRGB or R10G10B10A2 for HDR10
         desc.renderTargetFormat[0] = RenderFormat::R16G16B16A16_FLOAT;
+        LIBERTY_GPU_CRUMB("gpu:init: tonemap pipeline create");
         g_hdrTonemapPipeline = g_device->createGraphicsPipeline(desc);
         LOG_INFO("[Video] HDR tonemap pipeline created");
     }
@@ -2538,10 +2552,14 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
     g_backBuffer->height = 720;
     g_backBuffer->format = BACKBUFFER_FORMAT;
     g_backBuffer->textureHolder = g_device->createTexture(RenderTextureDesc::Texture2D(1, 1, 1, BACKBUFFER_FORMAT, RenderTextureFlag::RENDER_TARGET));
+    LIBERTY_GPU_CRUMB("gpu:init: backbuffer 1x1 texture done");
 
     Video::ComputeViewportDimensions();
+    LIBERTY_GPU_CRUMB("gpu:init: CheckSwapChain enter (real vkCreateSwapchainKHR + acquire)");
     CheckSwapChain();
+    LIBERTY_GPU_CRUMB("gpu:init: CheckSwapChain exit");
     BeginCommandList();
+    LIBERTY_GPU_CRUMB("gpu:init: BeginCommandList done");
 
     RenderTextureBarrier blankTextureBarriers[TEXTURE_DESCRIPTOR_NULL_COUNT];
     for (size_t i = 0; i < TEXTURE_DESCRIPTOR_NULL_COUNT; i++)
@@ -2550,6 +2568,7 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
     g_commandLists[g_frame]->barriers(RenderBarrierStage::NONE, blankTextureBarriers, std::size(blankTextureBarriers));
 
     // Initialize PostProcessRenderer for TAA/SMAA/FSR1
+    LIBERTY_GPU_CRUMB("gpu:init: postprocess init enter");
     PostProcess::InitializePostProcessRenderer(
         g_device.get(),
         g_pipelineLayout.get(),
@@ -2557,6 +2576,7 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
         Video::s_viewportWidth,
         Video::s_viewportHeight
     );
+    LIBERTY_GPU_CRUMB("gpu:init: postprocess init done");
 
     // Initialize Upscaler system (DLSS, FSR3, XeSS, MetalFX)
     // Set the graphics device for upscalers that need native API access
@@ -2566,10 +2586,13 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
         Upscaler::SetGraphicsDevice(g_device->getNativeInterface());
     }
 #endif
+    LIBERTY_GPU_CRUMB("gpu:init: upscaler enter");
     if (!Upscaler::Initialize()) {
         LOG_WARNING("[Video] Upscaler initialization failed - upscaling disabled");
     }
+    LIBERTY_GPU_CRUMB("gpu:init: upscaler done");
 
+    LIBERTY_GPU_CRUMB("gpu:init: Video::Initialize COMPLETE");
     return true;
 }
 

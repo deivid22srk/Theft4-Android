@@ -1127,6 +1127,7 @@ int main(int argc, char *argv[])
         os::process::ShowConsole();
     LOGN("Host Startup");
     HostStartup();
+    LIBERTY_ANDROID_LOGI("[Main] HostStartup() returned (video init complete)");
 #if defined(LIBERTY_RECOMP_DISCORD_RPC)
     os::discord::Initialize();
 #endif
