@@ -7,6 +7,7 @@
 #include <plume_render_interface.h>
 #include <memory>
 #include <cstdint>
+#include <vector>
 
 using namespace plume;
 
@@ -540,7 +541,24 @@ private:
     bool CreatePipelines();
     bool CreateRenderTargets(uint32_t width, uint32_t height);
     bool CreateSMAATables();
-    
+
+    // Deferred pipeline creation: pipelines are built on first use
+    // (EnsurePipeline) instead of eagerly at boot. Mesa Turnip (Adreno a7xx)
+    // SIGSEGVs inside vkCreateGraphicsPipelines for some of these shaders;
+    // every Apply* entry point bails gracefully while its pipeline is still
+    // null, so deferring keeps video init alive on any driver and only pays
+    // shader-compile cost for effects that are actually enabled.
+    struct PendingPipelineSpec {
+        RenderShader* pixelShader;
+        RenderFormat renderTargetFormat;
+        std::unique_ptr<RenderPipeline>* target;
+        const char* name;
+    };
+    std::vector<PendingPipelineSpec> m_pendingPipelines;
+    bool EnsurePipeline(std::unique_ptr<RenderPipeline>& slot);
+    bool EnsureSMAATables();
+    bool m_smaaTablesAttempted = false;
+
     void DrawFullscreenTriangle(RenderCommandList* commandList);
     
     bool m_initialized = false;

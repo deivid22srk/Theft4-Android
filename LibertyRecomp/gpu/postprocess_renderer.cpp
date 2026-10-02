@@ -136,10 +136,9 @@ bool PostProcessRenderer::Initialize(RenderDevice* device, RenderPipelineLayout*
     }
     LIBERTY_GPU_CRUMB("pp: init render targets done");
     
-    if (!CreateSMAATables()) {
-        LOG_ERROR("[PostProcessRenderer] Failed to create SMAA lookup tables");
-        return false;
-    }
+    // NOTE: SMAA lookup tables (RG8/R8 + STORAGE) are created lazily on first
+    // SMAA use (EnsureSMAATables) - some drivers reject these storage formats,
+    // and a failure here must never kill video initialization.
     
     // Create constant buffers for shader parameters using upload heap
     m_taaConstantBuffer = m_device->createBuffer(RenderBufferDesc::UploadBuffer(sizeof(TAAConstants)));
@@ -164,7 +163,11 @@ bool PostProcessRenderer::Initialize(RenderDevice* device, RenderPipelineLayout*
 
 void PostProcessRenderer::Shutdown() {
     if (!m_initialized) return;
-    
+
+    // Drop deferred pipeline specs
+    m_pendingPipelines.clear();
+    m_smaaTablesAttempted = false;
+
     // Release all resources
     m_taaPipeline.reset();
     m_smaaEdgePipeline.reset();
@@ -364,210 +367,122 @@ bool PostProcessRenderer::CreatePipelines() {
         LOG_WARNING("[PostProcessRenderer] Shaders not available - deferring pipeline creation");
         return true;
     }
-    
-    RenderGraphicsPipelineDesc desc;
-    desc.pipelineLayout = m_pipelineLayout;
-    desc.renderTargetCount = 1;
-    desc.renderTargetFormat[0] = RenderFormat::R16G16B16A16_FLOAT;
-    desc.renderTargetBlend[0] = RenderBlendDesc::Copy();
-    desc.depthEnabled = false;
-    desc.depthWriteEnabled = false;
-    
-    // TAA Pipeline
-    desc.vertexShader = m_fullscreenVS.get();
-    desc.pixelShader = m_taaPS.get();
-    LIBERTY_GPU_CRUMB("pp:pipe TAA create");
-    m_taaPipeline = m_device->createGraphicsPipeline(desc);
-    
-    // SMAA Edge Detection Pipeline
-    desc.pixelShader = m_smaaEdgePS.get();
-    desc.renderTargetFormat[0] = RenderFormat::R8G8_UNORM; // Edge buffer only needs RG
-    LIBERTY_GPU_CRUMB("pp:pipe SMAA_EDGE create");
-    m_smaaEdgePipeline = m_device->createGraphicsPipeline(desc);
-    
-    // SMAA Blend Weight Pipeline
-    desc.pixelShader = m_smaaBlendPS.get();
-    desc.renderTargetFormat[0] = RenderFormat::R8G8B8A8_UNORM;
-    LIBERTY_GPU_CRUMB("pp:pipe SMAA_BLEND create");
-    m_smaaBlendPipeline = m_device->createGraphicsPipeline(desc);
-    
-    // SMAA Neighborhood Blend Pipeline
-    desc.pixelShader = m_smaaNeighborhoodBlendPS.get();
-    desc.renderTargetFormat[0] = RenderFormat::R16G16B16A16_FLOAT;
-    LIBERTY_GPU_CRUMB("pp:pipe SMAA_NB create");
-    m_smaaNeighborhoodBlendPipeline = m_device->createGraphicsPipeline(desc);
-    
-    // FSR 1.0 EASU Pipeline
-    desc.pixelShader = m_fsr1EasuPS.get();
-    desc.renderTargetFormat[0] = RenderFormat::R16G16B16A16_FLOAT;
-    LIBERTY_GPU_CRUMB("pp:pipe FSR1_EASU create");
-    m_fsr1EasuPipeline = m_device->createGraphicsPipeline(desc);
-    
-    // FSR 1.0 RCAS Pipeline
-    desc.pixelShader = m_fsr1RcasPS.get();
-    LIBERTY_GPU_CRUMB("pp:pipe FSR1_RCAS create");
-    m_fsr1RcasPipeline = m_device->createGraphicsPipeline(desc);
-    
-    // Vignette Pipeline (optional - shader may not be compiled yet)
-    if (m_vignettePS) {
-        desc.pixelShader = m_vignettePS.get();
-        desc.renderTargetFormat[0] = RenderFormat::R16G16B16A16_FLOAT;
-        LIBERTY_GPU_CRUMB("pp:pipe VIGNETTE create");
-        m_vignettePipeline = m_device->createGraphicsPipeline(desc);
-        LOG_INFO("[PostProcessRenderer] Vignette pipeline created");
+
+    // NOTE (Android/Turnip): vkCreateGraphicsPipelines compiles the pipeline's
+    // shaders inside the driver, and Mesa Turnip builds SIGSEGV there for some
+    // of these shaders (proven at "pp:pipe TAA create" on two independent
+    // Turnip builds on Adreno 730; Qualcomm's proprietary driver accepts the
+    // same state). To keep video init alive on any driver, pipelines are no
+    // longer created eagerly here: they are registered below and built on
+    // first use (EnsurePipeline). Every Apply* entry point already bails
+    // gracefully while its pipeline is still null.
+    //
+    // Reset any pipelines from a previous Initialize so re-init never reuses
+    // stale driver objects.
+    m_taaPipeline.reset();
+    m_smaaEdgePipeline.reset();
+    m_smaaBlendPipeline.reset();
+    m_smaaNeighborhoodBlendPipeline.reset();
+    m_fsr1EasuPipeline.reset();
+    m_fsr1RcasPipeline.reset();
+    m_vignettePipeline.reset();
+    m_ssaoPipeline.reset();
+    m_ssaoBlurPipeline.reset();
+    m_ssaoCompositePipeline.reset();
+    m_dofPrefilterPipeline.reset();
+    m_dofBokehPipeline.reset();
+    m_dofPostfilterPipeline.reset();
+    m_dofCombinePipeline.reset();
+    m_ssrRaytracePipeline.reset();
+    m_ssrCompositePipeline.reset();
+    m_filmGrainPipeline.reset();
+    m_chromaticAberrationPipeline.reset();
+    m_motionBlurCameraPipeline.reset();
+    m_bloomExtractPipeline.reset();
+    m_bloomDownsamplePipeline.reset();
+    m_bloomUpsamplePipeline.reset();
+    m_bloomCompositePipeline.reset();
+    m_sunShaftsPrepassPipeline.reset();
+    m_sunShaftsRadialPipeline.reset();
+    m_sunShaftsCompositePipeline.reset();
+    m_pendingPipelines.clear();
+
+    // Core AA / upscaling pipelines
+    m_pendingPipelines.push_back({m_taaPS.get(),                   RenderFormat::R16G16B16A16_FLOAT, &m_taaPipeline,                   "TAA"});
+    m_pendingPipelines.push_back({m_smaaEdgePS.get(),              RenderFormat::R8G8_UNORM,         &m_smaaEdgePipeline,              "SMAA_EDGE"});
+    m_pendingPipelines.push_back({m_smaaBlendPS.get(),             RenderFormat::R8G8B8A8_UNORM,     &m_smaaBlendPipeline,             "SMAA_BLEND"});
+    m_pendingPipelines.push_back({m_smaaNeighborhoodBlendPS.get(), RenderFormat::R16G16B16A16_FLOAT, &m_smaaNeighborhoodBlendPipeline, "SMAA_NB"});
+    m_pendingPipelines.push_back({m_fsr1EasuPS.get(),              RenderFormat::R16G16B16A16_FLOAT, &m_fsr1EasuPipeline,              "FSR1_EASU"});
+    m_pendingPipelines.push_back({m_fsr1RcasPS.get(),              RenderFormat::R16G16B16A16_FLOAT, &m_fsr1RcasPipeline,              "FSR1_RCAS"});
+
+    // Optional effect pipelines (only registered when their shader loaded)
+    if (m_vignettePS)            m_pendingPipelines.push_back({m_vignettePS.get(),            RenderFormat::R16G16B16A16_FLOAT, &m_vignettePipeline,            "VIGNETTE"});
+    if (m_ssaoPS)                m_pendingPipelines.push_back({m_ssaoPS.get(),                RenderFormat::R16G16_FLOAT,       &m_ssaoPipeline,                "SSAO"});
+    if (m_ssaoBlurPS)            m_pendingPipelines.push_back({m_ssaoBlurPS.get(),            RenderFormat::R16G16_FLOAT,       &m_ssaoBlurPipeline,            "SSAO_BLUR"});
+    if (m_ssaoCompositePS)       m_pendingPipelines.push_back({m_ssaoCompositePS.get(),       RenderFormat::R16G16B16A16_FLOAT, &m_ssaoCompositePipeline,       "SSAO_COMPOSITE"});
+    if (m_dofPrefilterPS)        m_pendingPipelines.push_back({m_dofPrefilterPS.get(),        RenderFormat::R16G16B16A16_FLOAT, &m_dofPrefilterPipeline,        "DOF_PREFILTER"});
+    if (m_dofBokehPS)            m_pendingPipelines.push_back({m_dofBokehPS.get(),            RenderFormat::R16G16B16A16_FLOAT, &m_dofBokehPipeline,            "DOF_BOKEH"});
+    if (m_dofPostfilterPS)       m_pendingPipelines.push_back({m_dofPostfilterPS.get(),       RenderFormat::R16G16B16A16_FLOAT, &m_dofPostfilterPipeline,       "DOF_POSTFILTER"});
+    if (m_dofCombinePS)          m_pendingPipelines.push_back({m_dofCombinePS.get(),          RenderFormat::R16G16B16A16_FLOAT, &m_dofCombinePipeline,          "DOF_COMBINE"});
+    if (m_filmGrainPS)           m_pendingPipelines.push_back({m_filmGrainPS.get(),           RenderFormat::R16G16B16A16_FLOAT, &m_filmGrainPipeline,           "FILM_GRAIN"});
+    if (m_chromaticAberrationPS) m_pendingPipelines.push_back({m_chromaticAberrationPS.get(), RenderFormat::R16G16B16A16_FLOAT, &m_chromaticAberrationPipeline, "CHROMATIC"});
+    if (m_motionBlurCameraPS)    m_pendingPipelines.push_back({m_motionBlurCameraPS.get(),    RenderFormat::R16G16B16A16_FLOAT, &m_motionBlurCameraPipeline,    "MOTION_BLUR"});
+    if (m_bloomExtractPS)        m_pendingPipelines.push_back({m_bloomExtractPS.get(),        RenderFormat::R16G16B16A16_FLOAT, &m_bloomExtractPipeline,        "BLOOM_EXTRACT"});
+    if (m_bloomDownsamplePS)     m_pendingPipelines.push_back({m_bloomDownsamplePS.get(),     RenderFormat::R16G16B16A16_FLOAT, &m_bloomDownsamplePipeline,     "BLOOM_DOWNSAMPLE"});
+    if (m_bloomUpsamplePS)       m_pendingPipelines.push_back({m_bloomUpsamplePS.get(),       RenderFormat::R16G16B16A16_FLOAT, &m_bloomUpsamplePipeline,       "BLOOM_UPSAMPLE"});
+    if (m_bloomCompositePS)      m_pendingPipelines.push_back({m_bloomCompositePS.get(),      RenderFormat::R16G16B16A16_FLOAT, &m_bloomCompositePipeline,      "BLOOM_COMPOSITE"});
+    if (m_sunShaftsPrepassPS)    m_pendingPipelines.push_back({m_sunShaftsPrepassPS.get(),    RenderFormat::R16G16B16A16_FLOAT, &m_sunShaftsPrepassPipeline,    "SUNSHAFTS_PREPASS"});
+    if (m_sunShaftsRadialPS)     m_pendingPipelines.push_back({m_sunShaftsRadialPS.get(),     RenderFormat::R16G16B16A16_FLOAT, &m_sunShaftsRadialPipeline,     "SUNSHAFTS_RADIAL"});
+    if (m_sunShaftsCompositePS)  m_pendingPipelines.push_back({m_sunShaftsCompositePS.get(),  RenderFormat::R16G16B16A16_FLOAT, &m_sunShaftsCompositePipeline,  "SUNSHAFTS_COMPOSITE"});
+
+    LOGF_INFO("[PostProcessRenderer] {} pipelines registered for lazy creation on first use", m_pendingPipelines.size());
+    LIBERTY_GPU_CRUMB("pp: CreatePipelines done (%u deferred)", (unsigned)m_pendingPipelines.size());
+    return true;
+}
+
+bool PostProcessRenderer::EnsurePipeline(std::unique_ptr<RenderPipeline>& slot) {
+    if (slot) {
+        return true;
     }
-    
-    // SSAO Pipeline (GTAO calculation)
-    if (m_ssaoPS) {
-        desc.pixelShader = m_ssaoPS.get();
-        desc.renderTargetFormat[0] = RenderFormat::R16G16_FLOAT;  // R=AO, G=packed depth
-        LIBERTY_GPU_CRUMB("pp:pipe SSAO create");
-        m_ssaoPipeline = m_device->createGraphicsPipeline(desc);
-        LOG_INFO("[PostProcessRenderer] SSAO pipeline created");
+
+    for (auto it = m_pendingPipelines.begin(); it != m_pendingPipelines.end(); ++it) {
+        if (it->target != &slot) {
+            continue;
+        }
+
+        if (!m_device || !m_fullscreenVS || !it->pixelShader) {
+            return false;
+        }
+
+        RenderGraphicsPipelineDesc desc;
+        desc.pipelineLayout = m_pipelineLayout;
+        desc.renderTargetCount = 1;
+        desc.renderTargetFormat[0] = it->renderTargetFormat;
+        desc.renderTargetBlend[0] = RenderBlendDesc::Copy();
+        desc.depthEnabled = false;
+        desc.depthWriteEnabled = false;
+        desc.vertexShader = m_fullscreenVS.get();
+        desc.pixelShader = it->pixelShader;
+
+        LIBERTY_GPU_CRUMB("pp:pipe %s create (lazy)", it->name);
+        slot = m_device->createGraphicsPipeline(desc);
+        LOGF_INFO("[PostProcessRenderer] Pipeline '{}' created on first use", it->name);
+        m_pendingPipelines.erase(it);
+        return slot != nullptr;
     }
-    
-    // SSAO Blur Pipeline
-    if (m_ssaoBlurPS) {
-        desc.pixelShader = m_ssaoBlurPS.get();
-        desc.renderTargetFormat[0] = RenderFormat::R16G16_FLOAT;
-        LIBERTY_GPU_CRUMB("pp:pipe SSAO_BLUR create");
-        m_ssaoBlurPipeline = m_device->createGraphicsPipeline(desc);
-        LOG_INFO("[PostProcessRenderer] SSAO blur pipeline created");
+
+    return false;  // Unknown slot (never registered)
+}
+
+bool PostProcessRenderer::EnsureSMAATables() {
+    if (m_smaaTablesAttempted) {
+        return m_smaaAreaTex && m_smaaSearchTex;
     }
-    
-    // SSAO Composite Pipeline
-    if (m_ssaoCompositePS) {
-        desc.pixelShader = m_ssaoCompositePS.get();
-        desc.renderTargetFormat[0] = RenderFormat::R16G16B16A16_FLOAT;
-        LIBERTY_GPU_CRUMB("pp:pipe SSAO_COMPOSITE create");
-        m_ssaoCompositePipeline = m_device->createGraphicsPipeline(desc);
-        LOG_INFO("[PostProcessRenderer] SSAO composite pipeline created");
+    m_smaaTablesAttempted = true;
+    if (!CreateSMAATables()) {
+        LOG_WARNING("[PostProcessRenderer] SMAA lookup tables unavailable - SMAA disabled (driver may reject RG8/R8 storage)");
+        return false;
     }
-    
-    // DoF Multi-Pass Pipelines (FusionFix-style)
-    // Pass 1: Prefilter (downsample to half-res with weighted CoC)
-    if (m_dofPrefilterPS) {
-        desc.pixelShader = m_dofPrefilterPS.get();
-        desc.renderTargetFormat[0] = RenderFormat::R16G16B16A16_FLOAT;  // RGB + CoC in alpha
-        LIBERTY_GPU_CRUMB("pp:pipe DOF_PREFILTER create");
-        m_dofPrefilterPipeline = m_device->createGraphicsPipeline(desc);
-        LOG_INFO("[PostProcessRenderer] DoF prefilter pipeline created");
-    }
-    
-    // Pass 2: Bokeh (disk blur with FG/BG separation)
-    if (m_dofBokehPS) {
-        desc.pixelShader = m_dofBokehPS.get();
-        desc.renderTargetFormat[0] = RenderFormat::R16G16B16A16_FLOAT;  // RGB + FG alpha
-        LIBERTY_GPU_CRUMB("pp:pipe DOF_BOKEH create");
-        m_dofBokehPipeline = m_device->createGraphicsPipeline(desc);
-        LOG_INFO("[PostProcessRenderer] DoF bokeh pipeline created");
-    }
-    
-    // Pass 3: Postfilter (tent filter smoothing)
-    if (m_dofPostfilterPS) {
-        desc.pixelShader = m_dofPostfilterPS.get();
-        desc.renderTargetFormat[0] = RenderFormat::R16G16B16A16_FLOAT;
-        LIBERTY_GPU_CRUMB("pp:pipe DOF_POSTFILTER create");
-        m_dofPostfilterPipeline = m_device->createGraphicsPipeline(desc);
-        LOG_INFO("[PostProcessRenderer] DoF postfilter pipeline created");
-    }
-    
-    // Pass 4: Combine (composite bokeh with sharp source)
-    if (m_dofCombinePS) {
-        desc.pixelShader = m_dofCombinePS.get();
-        desc.renderTargetFormat[0] = RenderFormat::R16G16B16A16_FLOAT;
-        LIBERTY_GPU_CRUMB("pp:pipe DOF_COMBINE create");
-        m_dofCombinePipeline = m_device->createGraphicsPipeline(desc);
-        LOG_INFO("[PostProcessRenderer] DoF combine pipeline created");
-    }
-    
-    // Film Grain Pipeline
-    if (m_filmGrainPS) {
-        desc.pixelShader = m_filmGrainPS.get();
-        desc.renderTargetFormat[0] = RenderFormat::R16G16B16A16_FLOAT;
-        LIBERTY_GPU_CRUMB("pp:pipe FILM_GRAIN create");
-        m_filmGrainPipeline = m_device->createGraphicsPipeline(desc);
-        LOG_INFO("[PostProcessRenderer] Film grain pipeline created");
-    }
-    
-    // Chromatic Aberration Pipeline
-    if (m_chromaticAberrationPS) {
-        desc.pixelShader = m_chromaticAberrationPS.get();
-        desc.renderTargetFormat[0] = RenderFormat::R16G16B16A16_FLOAT;
-        LIBERTY_GPU_CRUMB("pp:pipe CHROMATIC create");
-        m_chromaticAberrationPipeline = m_device->createGraphicsPipeline(desc);
-        LOG_INFO("[PostProcessRenderer] Chromatic aberration pipeline created");
-    }
-    
-    // Motion Blur Camera Pipeline
-    if (m_motionBlurCameraPS) {
-        desc.pixelShader = m_motionBlurCameraPS.get();
-        desc.renderTargetFormat[0] = RenderFormat::R16G16B16A16_FLOAT;
-        LIBERTY_GPU_CRUMB("pp:pipe MOTION_BLUR create");
-        m_motionBlurCameraPipeline = m_device->createGraphicsPipeline(desc);
-        LOG_INFO("[PostProcessRenderer] Motion blur camera pipeline created");
-    }
-    
-    // Bloom Pipelines (MiniEngine-style pyramid)
-    if (m_bloomExtractPS) {
-        desc.pixelShader = m_bloomExtractPS.get();
-        desc.renderTargetFormat[0] = RenderFormat::R16G16B16A16_FLOAT;
-        LIBERTY_GPU_CRUMB("pp:pipe BLOOM_EXTRACT create");
-        m_bloomExtractPipeline = m_device->createGraphicsPipeline(desc);
-        LOG_INFO("[PostProcessRenderer] Bloom extract pipeline created");
-    }
-    
-    if (m_bloomDownsamplePS) {
-        desc.pixelShader = m_bloomDownsamplePS.get();
-        desc.renderTargetFormat[0] = RenderFormat::R16G16B16A16_FLOAT;
-        LIBERTY_GPU_CRUMB("pp:pipe BLOOM_DOWNSAMPLE create");
-        m_bloomDownsamplePipeline = m_device->createGraphicsPipeline(desc);
-        LOG_INFO("[PostProcessRenderer] Bloom downsample pipeline created");
-    }
-    
-    if (m_bloomUpsamplePS) {
-        desc.pixelShader = m_bloomUpsamplePS.get();
-        desc.renderTargetFormat[0] = RenderFormat::R16G16B16A16_FLOAT;
-        LIBERTY_GPU_CRUMB("pp:pipe BLOOM_UPSAMPLE create");
-        m_bloomUpsamplePipeline = m_device->createGraphicsPipeline(desc);
-        LOG_INFO("[PostProcessRenderer] Bloom upsample pipeline created");
-    }
-    
-    if (m_bloomCompositePS) {
-        desc.pixelShader = m_bloomCompositePS.get();
-        desc.renderTargetFormat[0] = RenderFormat::R16G16B16A16_FLOAT;
-        LIBERTY_GPU_CRUMB("pp:pipe BLOOM_COMPOSITE create");
-        m_bloomCompositePipeline = m_device->createGraphicsPipeline(desc);
-        LOG_INFO("[PostProcessRenderer] Bloom composite pipeline created");
-    }
-    
-    // Sun Shafts Pipelines (FusionFix-style GPU Gems 3)
-    if (m_sunShaftsPrepassPS) {
-        desc.pixelShader = m_sunShaftsPrepassPS.get();
-        desc.renderTargetFormat[0] = RenderFormat::R16G16B16A16_FLOAT;
-        LIBERTY_GPU_CRUMB("pp:pipe SUNSHAFTS_PREPASS create");
-        m_sunShaftsPrepassPipeline = m_device->createGraphicsPipeline(desc);
-        LOG_INFO("[PostProcessRenderer] Sun shafts prepass pipeline created");
-    }
-    
-    if (m_sunShaftsRadialPS) {
-        desc.pixelShader = m_sunShaftsRadialPS.get();
-        desc.renderTargetFormat[0] = RenderFormat::R16G16B16A16_FLOAT;
-        LIBERTY_GPU_CRUMB("pp:pipe SUNSHAFTS_RADIAL create");
-        m_sunShaftsRadialPipeline = m_device->createGraphicsPipeline(desc);
-        LOG_INFO("[PostProcessRenderer] Sun shafts radial pipeline created");
-    }
-    
-    if (m_sunShaftsCompositePS) {
-        desc.pixelShader = m_sunShaftsCompositePS.get();
-        desc.renderTargetFormat[0] = RenderFormat::R16G16B16A16_FLOAT;
-        LIBERTY_GPU_CRUMB("pp:pipe SUNSHAFTS_COMPOSITE create");
-        m_sunShaftsCompositePipeline = m_device->createGraphicsPipeline(desc);
-        LOG_INFO("[PostProcessRenderer] Sun shafts composite pipeline created");
-    }
-    
-    LOG_INFO("[PostProcessRenderer] Pipelines created");
-    LIBERTY_GPU_CRUMB("pp: CreatePipelines done");
     return true;
 }
 
@@ -787,7 +702,12 @@ bool PostProcessRenderer::ApplyTAA(RenderCommandList* commandList,
                                     float jitterX, float jitterY,
                                     float prevJitterX, float prevJitterY,
                                     bool resetHistory) {
-    if (!m_initialized || !m_taaPipeline) {
+    if (!m_initialized) {
+        return false;
+    }
+    // Lazy-create on first use (Turnip-safe boot: pipelines are not built eagerly)
+    EnsurePipeline(m_taaPipeline);
+    if (!m_taaPipeline) {
         return false;
     }
     
@@ -872,7 +792,17 @@ void PostProcessRenderer::SwapTAAHistory() {
 bool PostProcessRenderer::ApplySMAA(RenderCommandList* commandList,
                                      RenderTexture* colorTexture,
                                      RenderTexture* outputTexture) {
-    if (!m_initialized || !m_smaaEdgePipeline || !m_smaaBlendPipeline) {
+    if (!m_initialized) {
+        return false;
+    }
+    // Lazy-create on first use (Turnip-safe boot: pipelines are not built eagerly)
+    EnsurePipeline(m_smaaEdgePipeline);
+    EnsurePipeline(m_smaaBlendPipeline);
+    EnsurePipeline(m_smaaNeighborhoodBlendPipeline);
+    if (!EnsureSMAATables()) {
+        return false;
+    }
+    if (!m_smaaEdgePipeline || !m_smaaBlendPipeline || !m_smaaNeighborhoodBlendPipeline) {
         return false;
     }
     
@@ -980,7 +910,13 @@ bool PostProcessRenderer::ApplyFSR1(RenderCommandList* commandList,
                                      uint32_t inputWidth, uint32_t inputHeight,
                                      uint32_t outputWidth, uint32_t outputHeight,
                                      float sharpness) {
-    if (!m_initialized || !m_fsr1EasuPipeline || !m_fsr1RcasPipeline) {
+    if (!m_initialized) {
+        return false;
+    }
+    // Lazy-create on first use (Turnip-safe boot: pipelines are not built eagerly)
+    EnsurePipeline(m_fsr1EasuPipeline);
+    EnsurePipeline(m_fsr1RcasPipeline);
+    if (!m_fsr1EasuPipeline || !m_fsr1RcasPipeline) {
         return false;
     }
     
@@ -1069,7 +1005,12 @@ bool PostProcessRenderer::ApplyVignette(RenderCommandList* commandList,
                                          RenderTexture* colorTexture,
                                          RenderTexture* outputTexture,
                                          uint32_t textureDescriptorIndex) {
-    if (!m_initialized || !m_vignettePipeline) {
+    if (!m_initialized) {
+        return false;
+    }
+    // Lazy-create on first use (Turnip-safe boot: pipelines are not built eagerly)
+    EnsurePipeline(m_vignettePipeline);
+    if (!m_vignettePipeline) {
         return false;
     }
     
@@ -1139,6 +1080,11 @@ bool PostProcessRenderer::ApplySSAO(RenderCommandList* commandList,
     if (Config::SSAO == ESSAO::Off) {
         return false;
     }
+
+    // Lazy-create on first use (Turnip-safe boot: pipelines are not built eagerly)
+    EnsurePipeline(m_ssaoPipeline);
+    EnsurePipeline(m_ssaoBlurPipeline);
+    EnsurePipeline(m_ssaoCompositePipeline);
     
     if (!depthTexture || !colorTexture || !outputTexture) {
         return false;
@@ -1315,6 +1261,12 @@ bool PostProcessRenderer::ApplyDoF(RenderCommandList* commandList,
     if (Config::DepthOfField == EDepthOfField::Off) {
         return false;
     }
+
+    // Lazy-create on first use (Turnip-safe boot: pipelines are not built eagerly)
+    EnsurePipeline(m_dofPrefilterPipeline);
+    EnsurePipeline(m_dofBokehPipeline);
+    EnsurePipeline(m_dofPostfilterPipeline);
+    EnsurePipeline(m_dofCombinePipeline);
     
     if (!colorTexture || !depthTexture || !outputTexture) {
         return false;
@@ -1638,7 +1590,12 @@ bool PostProcessRenderer::ApplyFilmGrain(RenderCommandList* commandList,
                                           RenderTexture* colorTexture,
                                           RenderTexture* outputTexture,
                                           uint32_t textureDescriptorIndex) {
-    if (!m_initialized || !m_filmGrainPipeline) {
+    if (!m_initialized) {
+        return false;
+    }
+    // Lazy-create on first use (Turnip-safe boot: pipelines are not built eagerly)
+    EnsurePipeline(m_filmGrainPipeline);
+    if (!m_filmGrainPipeline) {
         return false;
     }
     
@@ -1717,7 +1674,12 @@ bool PostProcessRenderer::ApplyChromaticAberration(RenderCommandList* commandLis
                                                     RenderTexture* colorTexture,
                                                     RenderTexture* outputTexture,
                                                     uint32_t textureDescriptorIndex) {
-    if (!m_initialized || !m_chromaticAberrationPipeline) {
+    if (!m_initialized) {
+        return false;
+    }
+    // Lazy-create on first use (Turnip-safe boot: pipelines are not built eagerly)
+    EnsurePipeline(m_chromaticAberrationPipeline);
+    if (!m_chromaticAberrationPipeline) {
         return false;
     }
     
@@ -1808,7 +1770,12 @@ bool PostProcessRenderer::ApplyMotionBlur(RenderCommandList* commandList,
                                            RenderTexture* depthTexture,
                                            RenderTexture* outputTexture,
                                            const float* invViewProj, const float* prevViewProj) {
-    if (!m_initialized || !m_motionBlurCameraPipeline) {
+    if (!m_initialized) {
+        return false;
+    }
+    // Lazy-create on first use (Turnip-safe boot: pipelines are not built eagerly)
+    EnsurePipeline(m_motionBlurCameraPipeline);
+    if (!m_motionBlurCameraPipeline) {
         return false;
     }
     
@@ -1902,6 +1869,12 @@ bool PostProcessRenderer::ApplyBloom(RenderCommandList* commandList,
     if (!Config::EnableBloom) {
         return false;
     }
+
+    // Lazy-create on first use (Turnip-safe boot: pipelines are not built eagerly)
+    EnsurePipeline(m_bloomExtractPipeline);
+    EnsurePipeline(m_bloomDownsamplePipeline);
+    EnsurePipeline(m_bloomUpsamplePipeline);
+    EnsurePipeline(m_bloomCompositePipeline);
     
     if (!colorTexture || !outputTexture) {
         return false;
@@ -2087,6 +2060,11 @@ bool PostProcessRenderer::ApplySunShafts(RenderCommandList* commandList,
     if (!Config::EnableSunShafts) {
         return false;
     }
+
+    // Lazy-create on first use (Turnip-safe boot: pipelines are not built eagerly)
+    EnsurePipeline(m_sunShaftsPrepassPipeline);
+    EnsurePipeline(m_sunShaftsRadialPipeline);
+    EnsurePipeline(m_sunShaftsCompositePipeline);
     
     if (!colorTexture || !depthTexture || !outputTexture) {
         return false;
