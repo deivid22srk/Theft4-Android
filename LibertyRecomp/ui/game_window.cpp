@@ -575,10 +575,20 @@ void GameWindow::ResetDimensions()
 uint32_t GameWindow::GetWindowFlags()
 {
 #if defined(__ANDROID__)
-    // Android: a single foreground window, always fullscreen, always Vulkan,
-    // no resize / maximize / hide semantics. SDL_WINDOW_HIDDEN on Android
-    // prevents the surface from ever being attached, so we drop it.
-    return SDL_WINDOW_VULKAN | SDL_WINDOW_FULLSCREEN;
+    // Android: a single foreground window, always fullscreen, no resize /
+    // maximize / hide semantics. SDL_WINDOW_HIDDEN on Android prevents the
+    // surface from ever being attached, so we drop it.
+    //
+    // Deliberately NO SDL_WINDOW_VULKAN: that flag makes SDL_CreateWindow
+    // require SDL's own Vulkan surface support (SDL_VULKAN build option, which
+    // is OFF in this tree — SDL is only the windowing layer; see
+    // thirdparty/CMakeLists.txt). The Vulkan presenter creates VkSurfaceKHR
+    // itself from the ANativeWindow* handle via vkCreateAndroidSurfaceKHR
+    // (vulkan_presenter.cpp), so SDL's Vulkan path is never used. Requesting
+    // the flag made SDL_CreateWindow fail with "Vulkan support is either not
+    // configured in SDL or not available in current SDL video driver
+    // (android) or platform" and boot die before video init.
+    return SDL_WINDOW_FULLSCREEN;
 #else
     // SDL3: SDL_WINDOW_ALLOW_HIGHDPI removed (always on)
     uint32_t flags = SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE;
