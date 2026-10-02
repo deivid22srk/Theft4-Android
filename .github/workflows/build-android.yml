@@ -72,6 +72,17 @@ jobs:
             || true
           echo "Installed CMake versions:"; ls "$ANDROID_HOME/cmake"
 
+      # Builds libadrenotools + the 4 hook libraries (bylaws/libadrenotools,
+      # vendored as thirdparty/libadrenotools) with the NDK and drops the .so
+      # files into os/android/app/src/main/jniLibs/arm64-v8a/ so Gradle
+      # packages them. This powers the in-app custom Adreno GPU driver
+      # (Mesa turnip) feature; the app falls back to the system driver when
+      # no driver is activated.
+      - name: Build libadrenotools (custom Adreno driver support)
+        run: |
+          chmod +x scripts/build_adrenotools.sh
+          scripts/build_adrenotools.sh
+
       # Pre-download the Gradle distribution with retries. Build #4 died here
       # with 'java.net.SocketException: Connection reset' during the wrapper
       # download; this makes the step self-healing.

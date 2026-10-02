@@ -798,3 +798,4 @@ CMakeUserPresets.json
 !scripts/
 scripts/*
 !scripts/file_to_c.py
+!scripts/build_adrenotools.sh

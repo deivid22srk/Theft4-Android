@@ -23,6 +23,11 @@ extern "C" const char* g_androidGameRoot;
 // DiscImageDevice — no multi-GB copy. Owning pointer, same rules as above.
 extern "C" const char* g_androidGameIso;
 
+// Shows a short Toast with a human-readable fatal error (defined in
+// jni_glue.cpp). Call from fatal boot paths BEFORE _Exit()/abort so the user
+// sees why the app closed instead of a silent exit. No-op off Android.
+extern "C" void LibertyAndroidNotifyFatal(const char* message);
+
 // RAII helper: attaches the current thread to the VM if needed, and detaches
 // on destruction (only if this object performed the attach).
 class JniScopedAttach

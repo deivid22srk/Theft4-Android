@@ -35,9 +35,14 @@
     __android_log_print(ANDROID_LOG_ERROR, "LibertyRecomp", __VA_ARGS__)
 #define LIBERTY_ANDROID_LOGI(...) \
     __android_log_print(ANDROID_LOG_INFO, "LibertyRecomp", __VA_ARGS__)
+// Toast a human-readable reason before dying — a fatal boot failure must be
+// visible to the user, not a silent app close. Defined in os/android/jni_glue.cpp.
+extern "C" void LibertyAndroidNotifyFatal(const char* message);
+#define LIBERTY_ANDROID_FATAL_TOAST(msg) LibertyAndroidNotifyFatal(msg)
 #else
 #define LIBERTY_ANDROID_FATAL(...) do {} while (0)
 #define LIBERTY_ANDROID_LOGI(...)  do {} while (0)
+#define LIBERTY_ANDROID_FATAL_TOAST(msg) do {} while (0)
 #endif
 #include <cpu/guest_thread.h>
 #include <gpu/video.h>
@@ -292,6 +297,7 @@ static void ShowVideoBackendErrorAndExit()
         fprintf(stderr, "[Main] Video backend initialization failed (no window available for message box).\n");
         fflush(stderr);
         LIBERTY_ANDROID_FATAL("[FATAL] Video backend initialization failed (no window available for message box)");
+        LIBERTY_ANDROID_FATAL_TOAST("Game failed to start: video initialization failed (see logcat LibertyRecomp)");
     }
     DIAG_EMIT("[EXIT-TRACE] main.cpp:203 calling _Exit\n");
     std::_Exit(1);
@@ -708,6 +714,7 @@ int main(int argc, char *argv[])
         printf("[Main] FATAL: Failed to stage default.xex from the selected ISO\n");
         fflush(stdout);
         LIBERTY_ANDROID_FATAL("[FATAL] Failed to stage default.xex from the selected ISO (details above under LibertyStdio)");
+        LIBERTY_ANDROID_FATAL_TOAST("Game failed to start: could not read the selected ISO (see logcat LibertyRecomp)");
         std::_Exit(1);
     }
 #endif
@@ -934,6 +941,12 @@ int main(int argc, char *argv[])
         if (rt_status != 0 /* X_STATUS_SUCCESS */) {
             fprintf(stderr, "[Main] FATAL: rex::Runtime::Setup() failed with 0x%08X\n", rt_status);
             LIBERTY_ANDROID_FATAL("[FATAL] rex::Runtime::Setup() failed with 0x%08X", rt_status);
+            {
+                char toast[128];
+                std::snprintf(toast, sizeof(toast),
+                              "Game failed to start: runtime init failed (0x%08X)", rt_status);
+                LIBERTY_ANDROID_FATAL_TOAST(toast);
+            }
             DIAG_EMIT("[EXIT-TRACE] main.cpp:478 calling _Exit\n");
             std::_Exit(1);
         }
@@ -951,6 +964,7 @@ int main(int argc, char *argv[])
                                         s_rexRuntime->memory())) {
             fprintf(stderr, "[Main] FATAL: rexcrt heap init failed\n");
             LIBERTY_ANDROID_FATAL("[FATAL] rexcrt heap init failed");
+            LIBERTY_ANDROID_FATAL_TOAST("Game failed to start: heap init failed (see logcat LibertyRecomp)");
             std::_Exit(1);
         }
         // DIAG: verify xstart is registered after Setup(). This is subordinate
@@ -1158,6 +1172,7 @@ int main(int argc, char *argv[])
                     printf("[Main] FATAL: Failed to extract OBB payload\n");
                     fflush(stdout);
                     LIBERTY_ANDROID_FATAL("[FATAL] Failed to extract OBB payload");
+                    LIBERTY_ANDROID_FATAL_TOAST("Game failed to start: OBB payload extraction failed (see logcat LibertyRecomp)");
                     std::_Exit(1);
                 }
             }
@@ -1171,6 +1186,7 @@ int main(int argc, char *argv[])
         fflush(stdout);
         LIBERTY_ANDROID_FATAL("[FATAL] Embedded game XEX not found at %s",
                               modulePath.string().c_str());
+        LIBERTY_ANDROID_FATAL_TOAST("Game failed to start: default.xex not found (see logcat LibertyRecomp)");
         std::_Exit(1);
     }
     DIAG_EMIT("[Main] Embedded build — game root: %s\n",

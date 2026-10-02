@@ -57,6 +57,7 @@ public class LibertySDLActivity extends SDLActivity {
     private static native void nativeSetPaths(String internalPath, String obbPath);
     private static native void nativeSetGameRoot(String gameRoot);
     private static native void nativeSetGameIso(String isoPath);
+    private static native void nativeSetAndroidDirs(String cacheDir, String nativeLibDir);
     // vibration_android.cpp
     private static native void nativeSetContext(Context context);
 
@@ -87,6 +88,7 @@ public class LibertySDLActivity extends SDLActivity {
             getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         mGameDir = p.getString(PREF_GAME_DIR, null);
         mGameIso = p.getString(PREF_GAME_ISO, null);
+        sAppContext = getApplicationContext();
         super.onCreate(savedInstanceState);
     }
 
@@ -106,6 +108,15 @@ public class LibertySDLActivity extends SDLActivity {
             String internal = getFilesDir() != null ? getFilesDir().getAbsolutePath() : "";
             String obb      = getObbDir()   != null ? getObbDir().getAbsolutePath()   : "";
             nativeSetPaths(internal, obb);
+
+            // Export cache dir / nativeLibraryDir to the native environment and
+            // hand over the active custom GPU driver (adrenotools), if any.
+            // Must run after nativeSetPaths (the native side reads the internal
+            // files dir from there to locate files/drivers/active.txt).
+            String cache = getCacheDir() != null ? getCacheDir().getAbsolutePath() : "";
+            String nativeLibs = getApplicationInfo() != null
+                ? getApplicationInfo().nativeLibraryDir : "";
+            nativeSetAndroidDirs(cache, nativeLibs);
 
             // Vibrator JNI bridge.
             nativeSetContext(this);
@@ -131,4 +142,23 @@ public class LibertySDLActivity extends SDLActivity {
             Log.e(TAG, "Native path setup failed", t);
         }
     }
+
+    // ─── Fatal-error Toast (called from native LibertyAndroidNotifyFatal) ──
+    //
+    // Enqueued on the UI thread via the system NotificationManagerService,
+    // which keeps it visible even after the process exits that follows a
+    // fatal boot failure. Used by jni_glue.cpp so a black-screen death always
+    // comes with a visible reason.
+    @SuppressWarnings("unused")  // invoked reflectively from JNI
+    public static void showFatalToast(String message) {
+        final String msg = (message != null && !message.isEmpty())
+            ? message : "The game failed to start (no details available)";
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
+            android.widget.Toast.makeText(sAppContext != null ? sAppContext : SDLActivity.getContext(),
+                           msg, android.widget.Toast.LENGTH_LONG).show());
+    }
+
+    // App context captured at onCreate — Toast context must not be an Activity
+    // that may already be finishing when the toast is posted.
+    private static android.content.Context sAppContext;
 }

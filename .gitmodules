@@ -157,3 +157,6 @@
 [submodule "glue/rexglue-sdk-main/thirdparty/tracy"]
 	path = glue/rexglue-sdk-main/thirdparty/tracy
 	url = https://github.com/wolfpld/tracy.git
+[submodule "thirdparty/libadrenotools"]
+	path = thirdparty/libadrenotools
+	url = https://github.com/bylaws/libadrenotools.git

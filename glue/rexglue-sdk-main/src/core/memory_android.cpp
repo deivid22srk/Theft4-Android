@@ -21,17 +21,33 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <string>
 
 #include <android/api-level.h>
+#include <android/log.h>
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
+
+// memfd_create flags (linux/memfd.h). Declare inline — bionic only exposes
+// them from API 28 and we build against older sysroots too.
+#ifndef MFD_CLOEXEC
+#define MFD_CLOEXEC 0x0001U
+#endif
+#ifndef MFD_ALLOW_SEALING
+#define MFD_ALLOW_SEALING 0x0002U
+#endif
+#ifndef __NR_memfd_create
+// arm64 syscall table: memfd_create = 279 (Linux 3.17+).
+#define __NR_memfd_create 279
+#endif
 
 // /dev/ashmem ioctls. Not all NDK sysroots expose <linux/ashmem.h>, so declare
 // the bits we need inline — they have been ABI-stable since Android 2.x.
@@ -57,6 +73,14 @@ namespace rex {
 namespace memory {
 
 namespace {
+
+// Synchronous logcat breadcrumbs that survive even when the caller is about
+// to std::_Exit() (the async spdlog sinks can lose the last lines). Same
+// pattern as the main.cpp boot instrumentation.
+#define MEM_ALOGE(...) \
+  __android_log_print(ANDROID_LOG_ERROR, "rex.mem", __VA_ARGS__)
+#define MEM_ALOGI(...) \
+  __android_log_print(ANDROID_LOG_INFO, "rex.mem", __VA_ARGS__)
 
 // Cache the device API level. android_get_device_api_level() is available from
 // NDK r11+ / API 24+; for older API levels fall back to parsing the build
@@ -261,35 +285,107 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
 
 // ── File mapping (shared memory) ─────────────────────────────────────────────
 
+// WHY THE FALLBACK CHAIN BELOW EXISTS (device-verified, Android 14 / SDK 34):
+//
+// The guest address-space reservation needs a ~4.5 GiB fd-backed shared
+// mapping (Xenia-style aliased views). libandroid's ASharedMemory_create()
+// routes into libcutils ashmem_create_region(), which only uses memfd when
+// the VENDOR property sys.use_memfd is true — the default is FALSE. The
+// non-memfd path does open("/dev/ashmem"), and untrusted_app SELinux policy
+// has had NO open permission on ashmem_device since Android 10:
+//   avc: denied { open } for path="/dev/ashmem" scontext=u:r:untrusted_app
+//        tcontext=u:object_r:ashmem_device:s0 tclass=chr_file permissive=0
+// So on those devices ASharedMemory_create ALWAYS fails for apps and the
+// guest memory never reserves (boot aborts with
+// "Unable to reserve the 4gb guest address space").
+//
+// Order (first success wins; every failure logs a breadcrumb with errno):
+//   1. memfd_create via direct syscall  — no SELinux restriction for apps,
+//      kernel 3.17+, supports multi-GiB sparse ftruncate and aliased
+//      MAP_SHARED views. This is the path that works everywhere.
+//   2. ASharedMemory_create             — works when the vendor enables
+//      sys.use_memfd (or future Android where libcutils flips to memfd).
+//   3. /dev/ashmem ioctls               — pre-Android-10 devices only.
+//   4. sparse file in the app cache dir — guaranteed fallback; needs
+//      REX_ANDROID_CACHE_DIR (set by jni_glue). Pages are F2FS/ext4, so this
+//      is slower than memfd but fully functional.
 FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, size_t length,
                                           PageAccess access, bool commit) {
   (void)access;
   (void)commit;
 
-  // Prefer ASharedMemory_create (API 26+). Returns an fd identical in semantics
-  // to the legacy ashmem fd: ftruncate-free, size set at creation, mmap-able.
-  if (auto create = LoadASharedMemoryCreate(); create != nullptr) {
-    int fd = create(path.c_str(), length);
-    return fd >= 0 ? static_cast<FileMappingHandle>(fd) : kFileMappingHandleInvalid;
-  }
+  const char* name = path.c_str();
 
-  // Fallback: legacy /dev/ashmem path for API < 26. API 29+ blocks this for
-  // apps targeting that level, but we only reach here when API < 26.
-  int fd = open("/dev/ashmem", O_RDWR | O_CLOEXEC);
-  if (fd < 0) {
-    return kFileMappingHandleInvalid;
-  }
-
-  char name_buf[ASHMEM_NAME_LEN];
-  std::snprintf(name_buf, sizeof(name_buf), "%s", path.c_str());
-  name_buf[ASHMEM_NAME_LEN - 1] = '\0';
-
-  if (ioctl(fd, ASHMEM_SET_NAME, name_buf) < 0 ||
-      ioctl(fd, ASHMEM_SET_SIZE, length) < 0) {
+  // Tier 1: memfd_create (direct syscall; the bionic wrapper needs API 28).
+  errno = 0;
+  int fd = static_cast<int>(syscall(__NR_memfd_create, name,
+                                    MFD_CLOEXEC | MFD_ALLOW_SEALING));
+  if (fd >= 0) {
+    if (ftruncate(fd, static_cast<off_t>(length)) == 0) {
+      MEM_ALOGI("guest memory: memfd_create('%s', %zu bytes) OK", name, length);
+      return static_cast<FileMappingHandle>(fd);
+    }
+    MEM_ALOGE("guest memory: memfd ftruncate(%zu) failed: %s", length, strerror(errno));
     close(fd);
-    return kFileMappingHandleInvalid;
+  } else {
+    MEM_ALOGE("guest memory: memfd_create failed: %s — trying ASharedMemory", strerror(errno));
   }
-  return static_cast<FileMappingHandle>(fd);
+
+  // Tier 2: ASharedMemory_create (API 26+, libandroid.so).
+  if (auto create = LoadASharedMemoryCreate(); create != nullptr) {
+    errno = 0;
+    int sfd = create(name, length);
+    if (sfd >= 0) {
+      MEM_ALOGI("guest memory: ASharedMemory_create('%s', %zu bytes) OK", name, length);
+      return static_cast<FileMappingHandle>(sfd);
+    }
+    MEM_ALOGE("guest memory: ASharedMemory_create failed: %s — trying /dev/ashmem",
+              strerror(errno));
+  }
+
+  // Tier 3: legacy /dev/ashmem (pre-Android-10 SELinux; blocked on modern).
+  errno = 0;
+  int afd = open("/dev/ashmem", O_RDWR | O_CLOEXEC);
+  if (afd >= 0) {
+    char name_buf[ASHMEM_NAME_LEN];
+    std::snprintf(name_buf, sizeof(name_buf), "%s", name);
+    name_buf[ASHMEM_NAME_LEN - 1] = '\0';
+    if (ioctl(afd, ASHMEM_SET_NAME, name_buf) == 0 &&
+        ioctl(afd, ASHMEM_SET_SIZE, length) == 0) {
+      MEM_ALOGI("guest memory: /dev/ashmem('%s', %zu bytes) OK", name, length);
+      return static_cast<FileMappingHandle>(afd);
+    }
+    MEM_ALOGE("guest memory: /dev/ashmem ioctl failed: %s", strerror(errno));
+    close(afd);
+  } else {
+    MEM_ALOGE("guest memory: open(/dev/ashmem) failed: %s — trying cache-dir file",
+              strerror(errno));
+  }
+
+  // Tier 4: sparse file in the app-private cache directory. The fd is unlinked
+  // immediately — the mapping lives as long as the fd does.
+  const char* cache_dir = std::getenv("REX_ANDROID_CACHE_DIR");
+  if (cache_dir && *cache_dir) {
+    std::string file_path = std::string(cache_dir) + "/" + name + ".bin";
+    errno = 0;
+    int ffd = open(file_path.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    if (ffd >= 0) {
+      unlink(file_path.c_str());
+      if (ftruncate(ffd, static_cast<off_t>(length)) == 0) {
+        MEM_ALOGI("guest memory: cache file mapping '%s' (%zu bytes) OK", file_path.c_str(),
+                  length);
+        return static_cast<FileMappingHandle>(ffd);
+      }
+      MEM_ALOGE("guest memory: cache file ftruncate(%zu) failed: %s", length,
+                strerror(errno));
+      close(ffd);
+    } else {
+      MEM_ALOGE("guest memory: open(%s) failed: %s", file_path.c_str(), strerror(errno));
+    }
+  }
+
+  MEM_ALOGE("guest memory: ALL backends failed to reserve %zu bytes for '%s'", length, name);
+  return kFileMappingHandleInvalid;
 }
 
 void CloseFileMappingHandle(FileMappingHandle handle, const std::filesystem::path& path) {

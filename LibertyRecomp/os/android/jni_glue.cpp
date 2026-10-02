@@ -3,12 +3,17 @@
 #include <jni.h>
 #include <string>
 #include <cstring>
+#include <cstdlib>
 #include <malloc.h>
+#include <cstdio>
+
+#include <android/log.h>
 
 #include <rex/filesystem.h>
 #include <rex/platform/android.h>
 
 #include "achievement_bridge_android.h"
+#include "jni_glue.h"
 
 const char* g_androidAppInternalPath = nullptr;
 const char* g_androidObbPath         = nullptr;
@@ -152,4 +157,107 @@ Java_com_libertyrecomp_LibertySDLActivity_nativeSetGameIso(
 {
     free(const_cast<char*>(g_androidGameIso));
     g_androidGameIso = CopyJString(env, isoPath);
+}
+
+// ─── Adrenotools (custom Adreno GPU driver) hand-off + env wiring ────────────
+//
+// vulkan_instance.cpp (ReXGlue) consults the environment BEFORE creating the
+// Vulkan instance:
+//   REX_VULKAN_LOADER_PATH    absolute path of the active custom driver .so
+//                             (derived from files/drivers/active.txt)
+//   REX_ANDROID_NATIVE_LIB_DIR applicationInfo.nativeLibraryDir — home of
+//                             libadrenotools.so + the 4 hook libraries
+// and memory_android.cpp uses REX_ANDROID_CACHE_DIR as the last-resort
+// backing store for the guest address-space reservation.
+extern "C" JNIEXPORT void JNICALL
+Java_com_libertyrecomp_LibertySDLActivity_nativeSetAndroidDirs(
+    JNIEnv* env,
+    jclass  /*clazz*/,
+    jstring cacheDir,
+    jstring nativeLibDir)
+{
+    const char* cache = CopyJString(env, cacheDir);
+    const char* libs  = CopyJString(env, nativeLibDir);
+
+    if (cache && *cache) {
+        setenv("REX_ANDROID_CACHE_DIR", cache, 1);
+    }
+    if (libs && *libs) {
+        setenv("REX_ANDROID_NATIVE_LIB_DIR", libs, 1);
+    }
+    if (g_androidAppInternalPath && *g_androidAppInternalPath) {
+        setenv("REX_ANDROID_FILES_DIR", g_androidAppInternalPath, 1);
+    }
+
+    // Read the driver activation file written by GpuDriverManager (Java):
+    //   files/drivers/active.txt  →  "id=<id>\nlib=<abs .so path>\n"
+    // When present, export the lib path so vulkan_instance.cpp routes the
+    // Vulkan loader through adrenotools. Absent file ⇒ system driver.
+    bool driver_active = false;
+    if (g_androidAppInternalPath && *g_androidAppInternalPath) {
+        char path[512];
+        std::snprintf(path, sizeof(path), "%s/drivers/active.txt",
+                      g_androidAppInternalPath);
+        if (FILE* f = std::fopen(path, "r")) {
+            char line[512];
+            while (std::fgets(line, sizeof(line), f)) {
+                size_t len = std::strlen(line);
+                while (len && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+                    line[--len] = '\0';
+                }
+                if (std::strncmp(line, "lib=", 4) == 0 && len > 4 && line[4] == '/') {
+                    setenv("REX_VULKAN_LOADER_PATH", line + 4, 1);
+                    driver_active = true;
+                    break;
+                }
+            }
+            std::fclose(f);
+        }
+    }
+    if (!driver_active) {
+        unsetenv("REX_VULKAN_LOADER_PATH");
+    }
+
+    __android_log_print(ANDROID_LOG_INFO, "LibertyRecomp",
+                        "Android dirs wired: cache=%s, native_libs=%s, gpu_driver=%s",
+                        cache ? cache : "(null)", libs ? libs : "(null)",
+                        driver_active ? "CUSTOM (adrenotools)" : "system");
+
+    free(const_cast<char*>(cache));
+    free(const_cast<char*>(libs));
+}
+
+// Shows a Toast from the native side on a fatal boot failure. Toasts are
+// enqueued via the system NotificationManagerService, so they remain visible
+// even after the process _Exit()s that follows the call — that gives the user
+// a visible reason instead of the app "just closing".
+extern "C" void LibertyAndroidNotifyFatal(const char* message)
+{
+    if (!message) return;
+    JniScopedAttach attach;
+    JNIEnv* env = attach.env();
+    if (!env) return;
+
+    jclass clazz = env->FindClass("com/libertyrecomp/LibertySDLActivity");
+    if (!clazz) {
+        env->ExceptionClear();
+        return;
+    }
+    jmethodID mid = env->GetStaticMethodID(clazz, "showFatalToast",
+                                           "(Ljava/lang/String;)V");
+    if (!mid) {
+        env->ExceptionClear();
+        return;
+    }
+    jstring jmsg = env->NewStringUTF(message);
+    if (!jmsg) {
+        env->ExceptionClear();
+        return;
+    }
+    env->CallStaticVoidMethod(clazz, mid, jmsg);
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+    }
+    __android_log_print(ANDROID_LOG_ERROR, "LibertyRecomp",
+                        "[FATAL-TOAST] %s", message);
 }

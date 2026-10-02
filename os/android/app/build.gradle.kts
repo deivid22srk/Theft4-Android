@@ -117,9 +117,13 @@ android {
 
     packaging {
         jniLibs {
-            // Preserve uncompressed .so placement so dlopen()/System.loadLibrary
-            // can mmap the library directly instead of extracting at runtime.
-            useLegacyPackaging = false
+            // Legacy packaging (= extractNativeLibs=true) is REQUIRED by
+            // libadrenotools: adrenotools_open_libvulkan() installs its driver
+            // hooks from nativeLibraryDir, which only contains real .so files
+            // when Android extracts the libraries at install time. With
+            // uncompressed .so-in-APK packaging the hook directory is empty and
+            // the custom driver silently falls back to the system driver.
+            useLegacyPackaging = true
         }
         resources {
             excludes += listOf(

@@ -9,6 +9,10 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -41,6 +45,109 @@ REXCVAR_DEFINE_BOOL(vulkan_log_debug_messages, true, "UI/Vulkan", "Log Vulkan de
 REXCVAR_DEFINE_BOOL(vulkan_moltenvk_synchronous_queue_submits, false, "UI/Vulkan",
                     "Process Vulkan queue submissions synchronously in MoltenVK");
 #endif
+
+#if REX_PLATFORM_ANDROID
+#include <dlfcn.h>
+
+namespace {
+
+// Diagnostics: write <files>/drivers/last_boot.txt so the app-side UI can show
+// which Vulkan driver actually booted (same contract as the active.txt
+// hand-off written by the Java GpuDriverManager).
+void WriteDriverBootOutcome(const char* status, const char* driver, const char* error) {
+  const char* files_dir = std::getenv("REX_ANDROID_FILES_DIR");
+  if (!files_dir || !*files_dir) {
+    return;
+  }
+  char path[512];
+  std::snprintf(path, sizeof(path), "%s/drivers/last_boot.txt", files_dir);
+  FILE* f = std::fopen(path, "w");
+  if (!f) {
+    return;
+  }
+  std::fprintf(f, "status=%s\ndriver=%s\nerror=%s\n", status ? status : "unknown",
+               driver ? driver : "-", error ? error : "-");
+  std::fclose(f);
+}
+
+// Custom Adreno driver support (libadrenotools — Mesa turnip & friends).
+//
+// The Java layer activates a driver by writing
+//   <filesDir>/drivers/active.txt   ("id=<id>\nlib=<abs .so path>\n")
+// and exporting REX_VULKAN_LOADER_PATH + REX_ANDROID_NATIVE_LIB_DIR into the
+// environment (os/android/jni_glue.cpp). If those are present, dlopen
+// $NATIVE_LIB_DIR/libadrenotools.so and ask it to open libvulkan.so with the
+// linker-namespace hooks that redirect the driver to the custom Turnip .so.
+// The returned handle IS the loader: vkGetInstanceProcAddr etc. are resolved
+// from it below, so the instance, device, Android surface and swapchain all
+// run on the custom driver. SDL never loads Vulkan for surface creation here
+// (the presenter builds VkSurfaceKHR from SDL_PROP_WINDOW_ANDROID_WINDOW_POIN-
+// TER via ifn.vkCreateAndroidSurfaceKHR), so there is no loader mismatch.
+//
+// Any failure falls back to the system driver — never fatal.
+bool TryLoadCustomAdrenoDriver(rex::platform::DynamicLibrary& loader) {
+  const char* loader_path = std::getenv("REX_VULKAN_LOADER_PATH");
+  if (!loader_path || !*loader_path) {
+    return false;  // no driver activated — silent, this is the normal path
+  }
+
+  const char* native_lib_dir = std::getenv("REX_ANDROID_NATIVE_LIB_DIR");
+  if (!native_lib_dir || !*native_lib_dir) {
+    WriteDriverBootOutcome("custom_failed", loader_path, "native lib dir unknown");
+    return false;
+  }
+
+  std::filesystem::path driver_path(loader_path);
+  std::string driver_name = driver_path.filename().string();
+  std::string driver_dir = driver_path.parent_path().string();
+  // adrenotools concatenates dir + name WITHOUT inserting a separator, so the
+  // directory part must end with '/'.
+  if (driver_dir.empty() || driver_dir.back() != '/') {
+    driver_dir += '/';
+  }
+
+  std::string adrenotools_path =
+      std::string(native_lib_dir) + "/libadrenotools.so";
+  void* adrenotools = dlopen(adrenotools_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+  if (!adrenotools) {
+    WriteDriverBootOutcome("custom_failed", driver_name.c_str(), dlerror());
+    return false;
+  }
+
+  using OpenLibvulkanFn = void* (*)(int, int, const char*, const char*, const char*,
+                                    const char*, const char*, void**);
+  auto open_libvulkan = reinterpret_cast<OpenLibvulkanFn>(
+      dlsym(adrenotools, "adrenotools_open_libvulkan"));
+  if (!open_libvulkan) {
+    WriteDriverBootOutcome("custom_failed", driver_name.c_str(),
+                           "adrenotools_open_libvulkan missing");
+    return false;
+  }
+
+  // ADRENOTOOLS_DRIVER_CUSTOM == 1 << 0 (adrenotools/driver.h priv.h). Only
+  // the custom-driver feature is used; file redirect / GPU mapping import are
+  // off. Args: dlopenMode, featureFlags, tmpLibDir(null: memfd on api>=29),
+  // hookLibDir, customDriverDir (trailing slash), customDriverName,
+  // fileRedirectDir, userMappingHandle.
+  constexpr int kAdrenoToolsDriverCustom = 1 << 0;
+  void* handle = open_libvulkan(RTLD_NOW, kAdrenoToolsDriverCustom, nullptr,
+                                native_lib_dir, driver_dir.c_str(),
+                                driver_name.c_str(), nullptr, nullptr);
+  if (!handle) {
+    WriteDriverBootOutcome("custom_failed", driver_name.c_str(),
+                           "adrenotools_open_libvulkan returned null (see hook_impl in logcat)");
+    return false;
+  }
+
+  loader.Adopt(handle);
+  WriteDriverBootOutcome("custom_ok", driver_name.c_str(), "-");
+  REXLOG_INFO("Vulkan loader: custom Adreno driver '{}' via libadrenotools",
+              driver_name);
+  return true;
+}
+
+}  // namespace
+#endif  // REX_PLATFORM_ANDROID
 
 namespace rex {
 namespace ui {
@@ -98,8 +205,20 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
     }
     return nullptr;
   }
+#if REX_PLATFORM_ANDROID
+  // Custom Adreno driver (libadrenotools) first — inert unless the Java layer
+  // activated one (REX_VULKAN_LOADER_PATH exported by jni_glue.cpp).
+  loader_loaded = TryLoadCustomAdrenoDriver(vulkan_instance->loader_);
+  if (!loader_loaded) {
+    loader_loaded = vulkan_instance->loader_.Load(platform::lib_names::kVulkanLoader);
+    if (loader_loaded && std::getenv("REX_VULKAN_LOADER_PATH")) {
+      WriteDriverBootOutcome("system", platform::lib_names::kVulkanLoader,
+                             "custom driver failed; fell back to system loader");
+    }
+  }
 #else
   loader_loaded = vulkan_instance->loader_.Load(platform::lib_names::kVulkanLoader);
+#endif
   if (!loader_loaded) {
     REXLOG_ERROR("Failed to load {}", platform::lib_names::kVulkanLoader);
     return nullptr;

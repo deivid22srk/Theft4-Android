@@ -38,6 +38,11 @@ void DynamicLibrary::Close() {
   }
 }
 
+void DynamicLibrary::Adopt(void* handle) {
+  Close();
+  handle_ = handle;
+}
+
 void* DynamicLibrary::GetRawSymbol(const char* name) const {
   if (!handle_)
     return nullptr;

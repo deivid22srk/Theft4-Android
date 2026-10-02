@@ -32,6 +32,11 @@ class DynamicLibrary {
 
   bool Load(const std::filesystem::path& path, SymbolResolution mode = SymbolResolution::kLazy);
   void Close();
+  // Takes ownership of a raw platform handle obtained outside Load() — e.g.
+  // the libvulkan.so handle returned by adrenotools_open_libvulkan(), which is
+  // the system loader opened inside a linker namespace with hook overrides for
+  // a custom Adreno GPU driver. The library is dlclose()d with this object.
+  void Adopt(void* handle);
   explicit operator bool() const { return handle_ != nullptr; }
 
   void* GetRawSymbol(const char* name) const;

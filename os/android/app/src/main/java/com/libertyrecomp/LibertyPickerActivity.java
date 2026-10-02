@@ -25,6 +25,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
+import java.util.Map;
 
 /**
  * Launcher activity: storage-permission gate + game-folder picker.
@@ -68,6 +69,7 @@ public class LibertyPickerActivity extends Activity {
     private static final int REQ_PICK_ISO         = 1004;
     private static final int REQ_MANAGE_STORAGE   = 1002;
     private static final int REQ_LEGACY_STORAGE   = 1003;
+    private static final int REQ_PICK_DRIVER      = 1005;
 
     // Minimum plausible size for a GTA IV Xbox 360 disc image (~7.3 GB
     // officially, but trimmed/DVDF rips exist). Anything below 64 MiB is
@@ -96,6 +98,8 @@ public class LibertyPickerActivity extends Activity {
     private TextView mPathLabel;
     private TextView mStatusLabel;
     private TextView mIsoLabel;
+    private TextView mDriverInfoLabel;
+    private LinearLayout mDriverList;
     private Button   mPlayBtn;
 
     // ─── Lifecycle ─────────────────────────────────────────────────────────
@@ -167,6 +171,13 @@ public class LibertyPickerActivity extends Activity {
             return;
         }
 
+        if (requestCode == REQ_PICK_DRIVER) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                importAndActivateDriver(data.getData());
+            }
+            return;
+        }
+
         if (requestCode == REQ_MANAGE_STORAGE) {
             refreshPickerStatus();
             return;
@@ -221,6 +232,7 @@ public class LibertyPickerActivity extends Activity {
         root.addView(buildPermissionCard());
         root.addView(buildFolderCard());
         root.addView(buildIsoCard());
+        root.addView(buildDriverCard());
 
         mPlayBtn = new Button(this);
         mPlayBtn.setText(getString(R.string.picker_play));
@@ -356,6 +368,157 @@ public class LibertyPickerActivity extends Activity {
         return card;
     }
 
+    /**
+     * Card managing custom Adreno GPU drivers (libadrenotools — Mesa turnip
+     * and other AdrenoTools-compatible packages). Drivers are imported as
+     * .zip packages, validated and extracted to internal storage by
+     * {@link GpuDriverManager}; the selected one is handed to the native
+     * Vulkan loader through files/drivers/active.txt.
+     */
+    private View buildDriverCard() {
+        LinearLayout card = newCard();
+
+        TextView label = new TextView(this);
+        label.setText("GPU driver (Adreno)");
+        label.setTextSize(11f);
+        label.setTypeface(Typeface.DEFAULT_BOLD);
+        label.setTextColor(C_TEXT);
+        card.addView(label);
+
+        mDriverInfoLabel = new TextView(this);
+        mDriverInfoLabel.setTextSize(13f);
+        mDriverInfoLabel.setTextColor(C_MUTED);
+        LinearLayout.LayoutParams infoLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        infoLp.topMargin = dp(4);
+        mDriverInfoLabel.setLayoutParams(infoLp);
+        card.addView(mDriverInfoLabel);
+
+        mDriverList = new LinearLayout(this);
+        mDriverList.setOrientation(LinearLayout.VERTICAL);
+        card.addView(mDriverList);
+
+        Button importBtn = new Button(this);
+        importBtn.setText("Import driver (.zip)");
+        LinearLayout.LayoutParams importLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        importLp.topMargin = dp(10);
+        importBtn.setLayoutParams(importLp);
+        importBtn.setOnClickListener(v -> pickDriverZip());
+        card.addView(importBtn);
+
+        Button systemBtn = new Button(this);
+        systemBtn.setText("Use system driver");
+        systemBtn.setOnClickListener(v -> {
+            GpuDriverManager.clearActive(this);
+            refreshPickerStatus();
+            Toast.makeText(this, "System driver selected", Toast.LENGTH_SHORT).show();
+        });
+        card.addView(systemBtn);
+
+        card.setTag("driver-card");
+        return card;
+    }
+
+    private void pickDriverZip() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        i.putExtra(Intent.EXTRA_MIME_TYPES, new String[] {
+            "application/zip", "application/octet-stream", "application/x-zip-compressed"});
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivityForResult(i, REQ_PICK_DRIVER);
+    }
+
+    private void importAndActivateDriver(Uri zipUri) {
+        try {
+            GpuDriverManager.DriverInfo info = GpuDriverManager.importFromZip(this, zipUri);
+            GpuDriverManager.setActive(this, info.id);
+            Toast.makeText(this, "Driver imported and activated: " + info.name,
+                Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            Log.w(TAG, "Driver import failed", e);
+            Toast.makeText(this, "Driver import failed: " + e.getMessage(),
+                Toast.LENGTH_LONG).show();
+        }
+        refreshPickerStatus();
+    }
+
+    /** Rebuilds the driver rows inside the driver card. */
+    private void refreshDriverRows() {
+        if (mDriverList == null || mDriverInfoLabel == null) return;
+        mDriverList.removeAllViews();
+
+        StringBuilder summary = new StringBuilder();
+        Map<String, String> boot = GpuDriverManager.lastBootOutcome(this);
+        if (boot != null) {
+            String status = boot.get("status");
+            String driver = boot.get("driver");
+            if ("custom_ok".equals(status)) {
+                summary.append("Last boot: custom driver (").append(driver).append(")");
+            } else if ("custom_failed".equals(status)) {
+                summary.append("Last boot: custom driver FAILED (")
+                       .append(boot.get("error")).append(")");
+            } else if (status != null) {
+                summary.append("Last boot: system driver");
+            }
+        }
+        mDriverInfoLabel.setText(summary.length() > 0 ? summary.toString()
+            : "Custom driver for Adreno GPUs (e.g. Mesa turnip). Optional — the system driver is used when none is selected.");
+
+        for (final GpuDriverManager.DriverInfo info : GpuDriverManager.listDrivers(this)) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(0, dp(6), 0, dp(6));
+
+            LinearLayout textCol = new LinearLayout(this);
+            textCol.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout.LayoutParams textLp = new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            textCol.setLayoutParams(textLp);
+
+            TextView title = new TextView(this);
+            title.setText(info.name + "  " + (info.version == null ? "" : info.version));
+            title.setTextSize(13f);
+            title.setTextColor(info.active ? 0xFF3FB950 : C_TEXT);
+            textCol.addView(title);
+
+            TextView sub = new TextView(this);
+            sub.setText(info.author + " · " + info.vendor + " · " + info.libName);
+            sub.setTextSize(11f);
+            sub.setTextColor(C_MUTED);
+            textCol.addView(sub);
+            row.addView(textCol);
+
+            Button useBtn = new Button(this);
+            useBtn.setText(info.active ? "ACTIVE" : "USE");
+            useBtn.setEnabled(!info.active);
+            useBtn.setOnClickListener(v -> {
+                try {
+                    GpuDriverManager.setActive(this, info.id);
+                    refreshPickerStatus();
+                } catch (Exception e) {
+                    Toast.makeText(this, "Activation failed: " + e.getMessage(),
+                        Toast.LENGTH_LONG).show();
+                }
+            });
+            row.addView(useBtn);
+
+            Button delBtn = new Button(this);
+            delBtn.setText("×");
+            delBtn.setOnClickListener(v -> {
+                GpuDriverManager.deleteDriver(this, info.id);
+                refreshPickerStatus();
+            });
+            row.addView(delBtn);
+
+            mDriverList.addView(row);
+        }
+    }
+
     private LinearLayout newCard() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
@@ -407,6 +570,8 @@ public class LibertyPickerActivity extends Activity {
         boolean canPlay = haveStorageAccess() && (folderValid || isoValid);
         mPlayBtn.setEnabled(canPlay);
         mPlayBtn.setAlpha(canPlay ? 1f : 0.5f);
+
+        refreshDriverRows();
     }
 
     private View findViewWithTag(String tag) {
