@@ -181,11 +181,15 @@ class Runtime {
 
   // Launch XEX module and return main thread
   // Call after LoadXexImage to start execution
-  system::object_ref<system::XThread> LaunchModule();
+  // entry_point_override: launch at this guest address instead of the XEX
+  // header's entry point. Used by AOT recomp builds whose function table is
+  // the authority for guest code and whose shipped XEX may be a different
+  // build than the one the recomp was generated from (0 = use XEX entry).
+  system::object_ref<system::XThread> LaunchModule(uint32_t entry_point_override = 0);
 
   // Prepare module launch: creates suspended main thread without resuming.
   // Call thread->Resume() after any pre-launch hooks.
-  system::object_ref<system::XThread> PrepareModuleLaunch();
+  system::object_ref<system::XThread> PrepareModuleLaunch(uint32_t entry_point_override = 0);
 
   // Access the memory base pointer for recompiled code
   uint8_t* virtual_membase() const;

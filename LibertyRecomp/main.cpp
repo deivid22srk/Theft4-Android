@@ -1441,7 +1441,40 @@ int main(int argc, char *argv[])
                 (void*)xsf, (int)p->HasAnyFunctionTable(), (void*)rt);
         fflush(stderr);
     }
-    auto main_xthread = rt->LaunchModule();
+    // ------------------------------------------------------------------
+    // Launch entry resolution (run5 TvpL5PVd): the XEX inside the user's
+    // ISO may be a DIFFERENT build from the XEX the recomp was generated
+    // against. The loaded ISO XEX's header entry point (0x829A0860 on the
+    // reported ISO) is not a function start in the recomp function table -
+    // which only contains the generator's own entry, the CRT startup
+    // "xstart" @ 0x82A11290 (import calls are resolved at recomp time, so
+    // the loaded XEX's code is never dispatched - only its entry point
+    // was). Prefer the XEX entry when it IS registered (matching builds);
+    // otherwise launch at xstart instead of dying with "No function
+    // registered" and a 5s watchdog stall.
+    // ------------------------------------------------------------------
+    uint32_t xex_entry = 0;
+    if (auto* ks = rt->kernel_state()) {
+        auto exe = ks->GetExecutableModule();  // object_ref (RAII)
+        if (exe) {
+            xex_entry = exe->entry_point();
+        }
+    }
+    auto* dispatcher = rt->function_dispatcher();
+    uint32_t launch_entry = 0;
+    if (xex_entry != 0 && dispatcher && dispatcher->GetFunction(xex_entry)) {
+        launch_entry = xex_entry;
+        fprintf(stderr, "[Main] Launch entry: XEX entry %08X is registered - launching there\n",
+                launch_entry);
+    } else {
+        launch_entry = 0x82A11290;  // xstart - recomp CRT startup
+        fprintf(stderr,
+                "[Main] Launch entry: XEX entry %08X has NO recompiled function "
+                "(XEX build differs from recomp source) - falling back to xstart @ %08X\n",
+                xex_entry, launch_entry);
+    }
+    fflush(stderr);
+    auto main_xthread = rt->LaunchModule(launch_entry);
     if (!main_xthread) {
         printf("[Main] FATAL: LaunchModule() returned null\n");
         fflush(stdout);

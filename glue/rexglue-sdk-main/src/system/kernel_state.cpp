@@ -568,7 +568,8 @@ object_ref<XModule> KernelState::GetModule(const std::string_view name, bool use
   return nullptr;
 }
 
-object_ref<XThread> KernelState::PrepareModuleLaunch(object_ref<UserModule> module) {
+object_ref<XThread> KernelState::PrepareModuleLaunch(object_ref<UserModule> module,
+                                                     uint32_t entry_point_override) {
   if (!module->is_executable()) {
     return nullptr;
   }
@@ -576,10 +577,18 @@ object_ref<XThread> KernelState::PrepareModuleLaunch(object_ref<UserModule> modu
   SetExecutableModule(module);
   REXSYS_INFO("KernelState: Preparing module launch...");
 
+  // The entry point normally comes from the loaded XEX header. In AOT-recomp
+  // builds the function dispatcher table is the authority for executable
+  // guest code, and the shipped XEX may be a different build than the one
+  // the recomp was generated from (different ISO/region/title-update).
+  // Callers can then pass entry_point_override to launch at the recomp's
+  // canonical CRT startup instead of failing with "No function registered".
+  uint32_t entry = entry_point_override ? entry_point_override : module->entry_point();
+
   // Create a thread to run in.
   // We start suspended so the caller can inspect/attach before resume.
   auto thread = object_ref<XThread>(new XThread(
-      this, module->stack_size(), 0, module->entry_point(), 0, X_CREATE_SUSPENDED, true, true));
+      this, module->stack_size(), 0, entry, 0, X_CREATE_SUSPENDED, true, true));
 
   // We know this is the 'main thread'.
   thread->set_name("Main XThread");
@@ -593,8 +602,9 @@ object_ref<XThread> KernelState::PrepareModuleLaunch(object_ref<UserModule> modu
   return thread;
 }
 
-object_ref<XThread> KernelState::LaunchModule(object_ref<UserModule> module) {
-  auto thread = PrepareModuleLaunch(std::move(module));
+object_ref<XThread> KernelState::LaunchModule(object_ref<UserModule> module,
+                                              uint32_t entry_point_override) {
+  auto thread = PrepareModuleLaunch(std::move(module), entry_point_override);
   if (thread) {
     thread->Resume();
   }

@@ -263,8 +263,10 @@ class KernelState {
   bool IsKernelModule(const std::string_view name);
   object_ref<XModule> GetModule(const std::string_view name, bool user_only = false);
 
-  object_ref<XThread> LaunchModule(object_ref<UserModule> module);
-  object_ref<XThread> PrepareModuleLaunch(object_ref<UserModule> module);
+  object_ref<XThread> LaunchModule(object_ref<UserModule> module,
+                                   uint32_t entry_point_override = 0);
+  object_ref<XThread> PrepareModuleLaunch(object_ref<UserModule> module,
+                                          uint32_t entry_point_override = 0);
   object_ref<UserModule> GetExecutableModule();
   void SetExecutableModule(object_ref<UserModule> module);
   object_ref<UserModule> LoadUserModule(const std::string_view name, bool call_entry = true);

@@ -409,14 +409,14 @@ X_STATUS Runtime::LoadXexImage(const std::string_view module_path) {
   return X_STATUS_SUCCESS;
 }
 
-system::object_ref<system::XThread> Runtime::PrepareModuleLaunch() {
+system::object_ref<system::XThread> Runtime::PrepareModuleLaunch(uint32_t entry_point_override) {
   auto executable = kernel_state_->GetExecutableModule();
   if (!executable) {
     REXSYS_ERROR("Runtime::PrepareModuleLaunch: No executable module loaded");
     return nullptr;
   }
 
-  auto thread = kernel_state_->PrepareModuleLaunch(executable);
+  auto thread = kernel_state_->PrepareModuleLaunch(executable, entry_point_override);
   if (!thread) {
     REXSYS_ERROR("Runtime::PrepareModuleLaunch: Failed to prepare module");
     return nullptr;
@@ -426,8 +426,8 @@ system::object_ref<system::XThread> Runtime::PrepareModuleLaunch() {
   return thread;
 }
 
-system::object_ref<system::XThread> Runtime::LaunchModule() {
-  auto thread = PrepareModuleLaunch();
+system::object_ref<system::XThread> Runtime::LaunchModule(uint32_t entry_point_override) {
+  auto thread = PrepareModuleLaunch(entry_point_override);
   if (thread) {
     thread->Resume();
     REXSYS_DEBUG("  Module launched on thread '{}'", thread->name());
